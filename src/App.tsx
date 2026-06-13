@@ -1,11 +1,27 @@
 import { Routes, Route, useParams, useNavigate } from 'react-router-dom';
 import React, { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { motion } from 'framer-motion';
+import QRCode from 'qrcode';
 
 
 export interface User { id: number; username: string; email: string; }
 export interface Message { id?: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; isStreaming?: boolean; internalContent?: string; tool_calls?: any[]; timestamp?: string; executionTime?: number; tokens?: number; }
-export interface KanbanTask { id: string; text: string; column: string; }
+export interface KanbanTask { 
+  id: string; 
+  text: string; 
+  column: string; 
+  description?: string; 
+  priority?: 'high' | 'medium' | 'low' | 'none'; 
+  dueDate?: string; 
+  tags?: string[]; 
+}
+export interface KanbanBoard {
+  id: string;
+  name: string;
+  emoji: string;
+  color?: string;
+  tasks: KanbanTask[];
+}
 export interface Agenda { id?: string; dateStr: string; time: string; title: string; color?: string; }
 export interface NoteTask { text: string; done: boolean; }
 export interface Note { id: string; title: string; type: 'text' | 'todo'; content: string; tasks?: any[]; is_pinned?: boolean; is_archived?: boolean; order_index?: number; created_at?: string; color?: string; bg_image?: string; bg_position?: string; tags?: string; }
@@ -13,7 +29,7 @@ export interface ChartData { name: string; value: number; color?: string; }
 export interface Chart { id: string; type: 'bar' | 'line' | 'pie'; title: string; data: ChartData[]; }
 export interface Session { id: string; title: string; type: string; messages: Message[]; data: any; updatedAt: string; }
 import Groq from 'groq-sdk';
-import { Clock, ChevronDown, Send, Settings, User, Loader2, MessageSquare, Search, PanelLeftClose, PanelLeft, PanelRightClose, PanelRight, Edit2, Eye, FileText, CheckCircle, Calendar, ChevronLeft, ChevronRight, Paperclip, Trash2, Plus, Layout, PieChart as PieChartIcon, Upload, Download, Folder, Archive, CheckSquare, Check, X, Move, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { Clock, ChevronDown, Send, Settings, User, Loader2, MessageSquare, Search, PanelLeftClose, PanelLeft, PanelRightClose, PanelRight, Edit2, Eye, FileText, CheckCircle, Calendar, ChevronLeft, ChevronRight, Paperclip, Trash2, Plus, Layout, PieChart as PieChartIcon, Upload, Download, Folder, Archive, CheckSquare, Check, X, Move, Image as ImageIcon, Sparkles, Briefcase, Compass, GraduationCap, Home, Target, Rocket, Code, Award, Heart, Zap, List, BookOpen, Activity } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -140,6 +156,33 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
   const [newAgendaColor, setNewAgendaColor] = useState('#3b82f6');
   const [editingAgendaId, setEditingAgendaId] = useState<string | null>(null);
 
+  const [showClockSettingsModal, setShowClockSettingsModal] = useState(false);
+  const [showSeconds, setShowSeconds] = useState(() => localStorage.getItem('clock_show_seconds') !== 'false');
+  const [use12Hour, setUse12Hour] = useState(() => localStorage.getItem('clock_use_12hour') === 'true');
+  const [dateLocale, setDateLocale] = useState(() => localStorage.getItem('clock_date_locale') || 'id-ID');
+  const [showWeekday, setShowWeekday] = useState(() => localStorage.getItem('clock_show_weekday') !== 'false');
+  const [showYear, setShowYear] = useState(() => localStorage.getItem('clock_show_year') !== 'false');
+
+  useEffect(() => {
+    localStorage.setItem('clock_show_seconds', String(showSeconds));
+  }, [showSeconds]);
+
+  useEffect(() => {
+    localStorage.setItem('clock_use_12hour', String(use12Hour));
+  }, [use12Hour]);
+
+  useEffect(() => {
+    localStorage.setItem('clock_date_locale', dateLocale);
+  }, [dateLocale]);
+
+  useEffect(() => {
+    localStorage.setItem('clock_show_weekday', String(showWeekday));
+  }, [showWeekday]);
+
+  useEffect(() => {
+    localStorage.setItem('clock_show_year', String(showYear));
+  }, [showYear]);
+
   const resetForm = () => {
     setIsAddingAgenda(false);
     setEditingAgendaId(null);
@@ -171,6 +214,21 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
     const oneHourAgo = new Date(time.getTime() - 60 * 60 * 1000);
     return agendaDate > oneHourAgo;
   });
+
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const dayAgendas = activeAgendas.filter(a => a.dateStr === selectedDateStr);
+  const firstEventTime = dayAgendas.length > 0 
+    ? [...dayAgendas].sort((a,b) => a.time.localeCompare(b.time))[0].time 
+    : null;
+  const scrollHour = firstEventTime ? parseInt(firstEventTime.split(':')[0]) : 8;
+
+  useEffect(() => {
+    if (selectedDateStr && timelineRef.current) {
+      const targetScrollTop = Math.max(0, (scrollHour * 50) - 20);
+      timelineRef.current.scrollTop = targetScrollTop;
+    }
+  }, [selectedDateStr, scrollHour]);
+
 
   const viewDate = new Date(currentYear, currentMonth + viewOffset, 1);
   const viewMonth = viewDate.getMonth();
@@ -350,10 +408,20 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
 
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
           <div style={{ fontSize: '24px', fontWeight: '700', fontFamily: 'monospace', color: 'var(--heading)', letterSpacing: '1px' }}>
-            {time.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            {time.toLocaleTimeString(dateLocale, { 
+              hour: '2-digit', 
+              minute: '2-digit', 
+              second: showSeconds ? '2-digit' : undefined,
+              hour12: use12Hour 
+            })}
           </div>
           <div style={{ fontSize: '13px', color: 'var(--muted)', fontWeight: 500, textAlign: 'center', textTransform: 'capitalize' }}>
-            {time.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            {time.toLocaleDateString(dateLocale, { 
+              weekday: showWeekday ? 'long' : undefined, 
+              day: 'numeric', 
+              month: 'long', 
+              year: showYear ? 'numeric' : undefined 
+            })}
           </div>
         </div>
 
@@ -367,18 +435,138 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {upcoming.map((a, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, borderLeft: `3px solid ${a.color || 'var(--accent)'}`, border: '1px solid var(--border)', borderLeftWidth: 3 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</div>
-                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{a.dateStr} • {a.time}</div>
+              {upcoming.map((a, idx) => {
+                const agendaColor = a.color || '#ffb703';
+                return (
+                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: `${agendaColor}15`, borderRadius: 8, borderLeft: `3px solid ${agendaColor}`, border: `1px solid ${agendaColor}33`, borderLeftWidth: 3 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</div>
+                      <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{a.dateStr} • {a.time}</div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
+
+        {/* Clock Settings Trigger (pushed to bottom-right via margin-top: auto) */}
+        <div style={{ width: '100%', display: 'flex', justifyContent: 'flex-end', marginTop: 'auto', paddingTop: 16 }}>
+          <button 
+            type="button" 
+            onClick={() => setShowClockSettingsModal(true)} 
+            style={{ 
+              background: 'none', 
+              border: 'none', 
+              color: 'var(--muted)', 
+              cursor: 'pointer', 
+              padding: 4, 
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--muted)'}
+            title="Clock & Date Settings"
+          >
+            <Settings size={16} />
+          </button>
+        </div>
       </div>
+
+      {/* Clock and Date Settings Modal Overlay */}
+      {showClockSettingsModal && (
+        <div 
+          className="settings-overlay" 
+          style={{ zIndex: 160 }}
+          onClick={() => setShowClockSettingsModal(false)}
+        >
+          <div 
+            className="settings-modal" 
+            style={{ maxWidth: '360px', width: '90%', display: 'flex', flexDirection: 'column', gap: 16, padding: '20px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 10 }}>
+              <h3 style={{ margin: 0, color: 'var(--heading)', fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Settings size={18} style={{ color: 'var(--accent)' }} /> Clock & Date Settings
+              </h3>
+              <button onClick={() => setShowClockSettingsModal(false)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4 }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Time Format */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase' }}>Time Format</span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: 'var(--fg)' }}>
+                  <input type="checkbox" checked={showSeconds} onChange={e => setShowSeconds(e.target.checked)} />
+                  Show seconds
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: 'var(--fg)' }}>
+                  <input type="checkbox" checked={use12Hour} onChange={e => setUse12Hour(e.target.checked)} />
+                  Use 12-hour format (AM/PM)
+                </label>
+              </div>
+
+              {/* Date Format */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase' }}>Date Format</span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: 'var(--fg)' }}>
+                  <input type="checkbox" checked={showWeekday} onChange={e => setShowWeekday(e.target.checked)} />
+                  Show day name (e.g. Sabtu)
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer', color: 'var(--fg)' }}>
+                  <input type="checkbox" checked={showYear} onChange={e => setShowYear(e.target.checked)} />
+                  Show year
+                </label>
+              </div>
+
+              {/* Language / Locale */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase' }}>Language / Locale</label>
+                <select 
+                  value={dateLocale} 
+                  onChange={e => setDateLocale(e.target.value)} 
+                  style={{ 
+                    padding: '6px 8px', 
+                    borderRadius: 6, 
+                    border: '1px solid var(--border)', 
+                    background: 'var(--panel)', 
+                    color: 'var(--fg)', 
+                    fontSize: 13,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="id-ID">Bahasa Indonesia (id-ID)</option>
+                  <option value="en-US">English (en-US)</option>
+                  <option value="en-GB">English - UK (en-GB)</option>
+                  <option value="ja-JP">日本語 (ja-JP)</option>
+                </select>
+              </div>
+            </div>
+
+            <button 
+              onClick={() => setShowClockSettingsModal(false)} 
+              style={{ 
+                background: 'var(--accent)', 
+                color: '#000', 
+                border: 'none', 
+                borderRadius: 6, 
+                padding: '8px', 
+                fontWeight: 'bold', 
+                cursor: 'pointer', 
+                fontSize: 13,
+                marginTop: 8
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modal Overlay for managing agendas on selected date */}
       {selectedDateStr && (
@@ -389,7 +577,7 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
         >
           <div 
             className="settings-modal" 
-            style={{ maxWidth: '460px', display: 'flex', flexDirection: 'column', gap: 20 }}
+            style={{ maxWidth: '600px', width: '90%', display: 'flex', flexDirection: 'column', gap: 20 }}
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -399,27 +587,152 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
               </button>
             </div>
 
-            <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }} className="hide-scrollbar">
-              {activeAgendas.filter(a => a.dateStr === selectedDateStr).length === 0 ? (
-                <p style={{ color: 'var(--muted)', fontStyle: 'italic', textAlign: 'center', margin: '20px 0' }}>No agendas for this day.</p>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {activeAgendas.filter(a => a.dateStr === selectedDateStr).sort((a,b) => a.time.localeCompare(b.time)).map((a, i) => (
-                    <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 12, background: `linear-gradient(to right, ${a.color || '#3b82f6'}22, rgba(255,255,255,0.02))`, borderRadius: 10, border: '1px solid var(--border)' }}>
-                      <div>
-                        <div style={{ fontWeight: 'bold', color: 'var(--heading)', fontSize: 14 }}>{a.title}</div>
-                        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{a.time}</div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        <button onClick={() => handleEditClick(a)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 6, borderRadius: '50%' }} onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} onMouseLeave={e => e.currentTarget.style.background='none'}>
-                          <Edit2 size={16} />
-                        </button>
-                        <button onClick={() => handleDeleteAgenda(a)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 6, borderRadius: '50%' }} onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} onMouseLeave={e => e.currentTarget.style.background='none'}>
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
+            {/* Daily Hourly Timeline Grid */}
+            <div 
+              ref={timelineRef}
+              style={{ 
+                height: '350px', 
+                overflowY: 'auto', 
+                position: 'relative', 
+                background: 'rgba(0,0,0,0.15)',
+                borderRadius: '10px',
+                border: '1px solid var(--border)',
+                display: 'flex',
+                flexDirection: 'column'
+              }}
+              className="hide-scrollbar"
+            >
+              {[...Array(24)].map((_, hour) => {
+                const hourStr = String(hour).padStart(2, '0') + ':00';
+                const hourAgendas = dayAgendas.filter(a => {
+                  const agendaHour = parseInt(a.time.split(':')[0]);
+                  return agendaHour === hour;
+                });
+                
+                return (
+                  <div 
+                    key={hour} 
+                    data-hour={hour}
+                    style={{ 
+                      display: 'flex', 
+                      minHeight: '50px', 
+                      position: 'relative',
+                      borderBottom: '1px solid rgba(255,255,255,0.02)'
+                    }}
+                  >
+                    {/* Time Label */}
+                    <div style={{ 
+                      width: '55px', 
+                      paddingRight: '8px', 
+                      textAlign: 'right', 
+                      fontSize: '11px', 
+                      color: 'var(--muted)', 
+                      fontWeight: 500,
+                      paddingTop: '6px',
+                      userSelect: 'none',
+                      borderRight: '1px solid var(--border)',
+                      background: 'rgba(0,0,0,0.1)'
+                    }}>
+                      {hourStr}
                     </div>
-                  ))}
+                    
+                    {/* Slot Container (Interactive) */}
+                    <div 
+                      onClick={() => {
+                        setNewAgendaTime(String(hour).padStart(2, '0') + ':00');
+                        setIsAddingAgenda(true);
+                        setEditingAgendaId(null);
+                        setNewAgendaTitle('');
+                      }}
+                      style={{ 
+                        flex: 1, 
+                        position: 'relative', 
+                        padding: '4px 8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px',
+                        cursor: 'pointer',
+                        transition: 'background 0.1s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      {hourAgendas.map((a, aIdx) => (
+                        <div 
+                          key={aIdx} 
+                          onClick={(e) => {
+                            e.stopPropagation(); // Avoid triggering slot click
+                          }}
+                          style={{ 
+                            background: `linear-gradient(to right, ${a.color || '#3b82f6'}33, rgba(255,255,255,0.02))`,
+                            borderLeft: `3px solid ${a.color || '#3b82f6'}`,
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            fontSize: '13px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            color: 'var(--fg)',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                            border: '1px solid rgba(255,255,255,0.04)',
+                            borderLeftWidth: '3px'
+                          }}
+                        >
+                          <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</span>
+                            <span style={{ fontSize: '10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>({a.time})</span>
+                          </div>
+                          
+                          <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                            <button 
+                              type="button"
+                              onClick={() => handleEditClick(a)} 
+                              style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '3px', borderRadius: '50%', display: 'flex', alignItems: 'center' }} 
+                              onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} 
+                              onMouseLeave={e => e.currentTarget.style.background='none'}
+                            >
+                              <Edit2 size={12} />
+                            </button>
+                            <button 
+                              type="button"
+                              onClick={() => handleDeleteAgenda(a)} 
+                              style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '3px', borderRadius: '50%', display: 'flex', alignItems: 'center' }} 
+                              onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} 
+                              onMouseLeave={e => e.currentTarget.style.background='none'}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Today's time indicator line */}
+              {selectedDateStr === todayStr && (
+                <div 
+                  style={{ 
+                    position: 'absolute', 
+                    left: '55px', 
+                    right: 0, 
+                    top: `${(time.getHours() * 50) + (time.getMinutes() / 60) * 50}px`, 
+                    height: '2px', 
+                    background: 'var(--accent)', 
+                    zIndex: 10,
+                    pointerEvents: 'none'
+                  }}
+                >
+                  <div style={{ 
+                    position: 'absolute', 
+                    left: '-4px', 
+                    top: '-3px', 
+                    width: '8px', 
+                    height: '8px', 
+                    borderRadius: '50%', 
+                    background: 'var(--accent)' 
+                  }} />
                 </div>
               )}
             </div>
@@ -997,85 +1310,1413 @@ function NotesWidget({ currentUser, onGenerateAI }: { currentUser: User; onGener
 }
 
 
-function KanbanWidget({ tasks, setTasks }: { tasks: KanbanTask[], setTasks: (t: KanbanTask[]) => void }) {
-  const [newTaskText, setNewTaskText] = useState('');
+export const BOARD_ICONS: Record<string, React.ComponentType<any>> = {
+  'Layout': Layout,
+  'Folder': Folder,
+  'FileText': FileText,
+  'Calendar': Calendar,
+  'Settings': Settings,
+  'Briefcase': Briefcase,
+  'Target': Target,
+  'Rocket': Rocket,
+  'Code': Code,
+  'GraduationCap': GraduationCap,
+  'Home': Home,
+  'Heart': Heart,
+  'Zap': Zap,
+  'Sparkles': Sparkles,
+  'List': List,
+  'BookOpen': BookOpen,
+  'Activity': Activity,
+  'Archive': Archive,
+  'Compass': Compass,
+  'Award': Award
+};
+
+export function BoardIcon({ iconName, size = 24, color = 'var(--accent)' }: { iconName: string, size?: number, color?: string }) {
+  const IconComponent = BOARD_ICONS[iconName];
+  if (IconComponent) {
+    return <IconComponent size={size} style={{ color }} />;
+  }
+  return <span style={{ fontSize: `${size}px`, lineHeight: 1, userSelect: 'none' }}>{iconName || '📋'}</span>;
+}
+
+
+function KanbanWidget({ 
+  boards, 
+  setBoards, 
+  activeBoardId, 
+  setActiveBoardId 
+}: { 
+  boards: KanbanBoard[], 
+  setBoards: (b: KanbanBoard[]) => void, 
+  activeBoardId: string | null, 
+  setActiveBoardId: (id: string | null) => void 
+}) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [editingTask, setEditingTask] = useState<KanbanTask | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [inlineAddCol, setInlineAddCol] = useState<string | null>(null);
+  const [inlineAddText, setInlineAddText] = useState('');
   
+  // Popover State for Board Icon Selector
+  const [showIconPopover, setShowIconPopover] = useState(false);
+  const [showNewBoardIconPopover, setShowNewBoardIconPopover] = useState(false);
+  
+  // Board Creation States
+  const [showNewBoardModal, setShowNewBoardModal] = useState(false);
+  const [newBoardName, setNewBoardName] = useState('');
+  const [newBoardEmoji, setNewBoardEmoji] = useState('Folder');
+
+  // Board Edit States
+  const [editingBoardId, setEditingBoardId] = useState<string | null>(null);
+  const [editBoardName, setEditBoardName] = useState('');
+  const [editBoardEmoji, setEditBoardEmoji] = useState('Folder');
+  const [editBoardColor, setEditBoardColor] = useState<string | undefined>();
+  const [showEditBoardIconPopover, setShowEditBoardIconPopover] = useState(false);
+
+  const BOARD_COLORS = [
+    '#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#d946ef', '#f43f5e'
+  ];
+
+  // Handle Drag & Drop
   const handleDragStart = (e: React.DragEvent, id: string) => {
     e.dataTransfer.setData('text/plain', id);
-    (e.currentTarget as HTMLElement).style.opacity = '0.5';
+    const element = e.currentTarget as HTMLElement;
+    element.style.opacity = '0.4';
   };
 
   const handleDragEnd = (e: React.DragEvent) => {
-    (e.currentTarget as HTMLElement).style.opacity = '1';
+    const element = e.currentTarget as HTMLElement;
+    element.style.opacity = '1';
   };
-  
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
   };
-  
+
   const handleDrop = (e: React.DragEvent, column: string) => {
     e.preventDefault();
     const id = e.dataTransfer.getData('text/plain');
-    if (id) setTasks(tasks.map(t => t.id === id ? { ...t, column } : t));
-  };
-
-  const addTask = () => {
-    if (newTaskText.trim()) {
-      setTasks([...tasks, { id: Date.now().toString(), text: newTaskText.trim(), column: 'todo' }]);
-      setNewTaskText('');
+    if (id && activeBoardId) {
+      setBoards(boards.map(b => b.id === activeBoardId ? {
+        ...b,
+        tasks: b.tasks.map(t => t.id === id ? { ...t, column } : t)
+      } : b));
     }
   };
 
-  const deleteTask = (id: string) => {
-    setTasks(tasks.filter(t => t.id !== id));
+  // Add a task to active board
+  const handleAddTask = (columnId: string, text: string) => {
+    if (!text.trim() || !activeBoardId) return;
+    const newTask: KanbanTask = {
+      id: Math.random().toString(36).substr(2, 9),
+      text: text.trim(),
+      column: columnId,
+      description: '',
+      priority: 'none',
+      dueDate: '',
+      tags: []
+    };
+    setBoards(boards.map(b => b.id === activeBoardId ? { ...b, tasks: [...b.tasks, newTask] } : b));
   };
 
-  const renderColumn = (columnId: string, title: string, color: string) => (
-    <div 
-      style={{ flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid var(--border)', overflow: 'hidden', transition: 'background 0.2s' }}
-      onDragOver={handleDragOver}
-      onDrop={(e) => handleDrop(e, columnId)}
-      onDragEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)'; }}
-      onDragLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)'; }}
-    >
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-         <div style={{ width: 10, height: 10, borderRadius: '50%', background: color }} />
-         <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600 }}>{title}</h3>
-         <span style={{ marginLeft: 'auto', background: 'var(--panel)', padding: '2px 8px', borderRadius: '12px', fontSize: '12px' }}>{tasks.filter(t => t.column === columnId).length}</span>
-      </div>
-      <div style={{ flex: 1, padding: '12px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        {tasks.filter(t => t.column === columnId).map(task => (
-          <div 
-            key={task.id}
-            draggable
-            onDragStart={(e) => handleDragStart(e, task.id)}
-            onDragEnd={handleDragEnd}
-            style={{ 
-              background: 'var(--panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border)', 
-              cursor: 'grab', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-            }}
-          >
-            <span style={{ fontSize: '13.5px', lineHeight: 1.5, color: 'var(--fg)', cursor: 'grab' }}>{task.text}</span>
-            <button onClick={() => deleteTask(task.id)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 0 }}>
-              <Trash2 size={14} />
+  // Delete a task from active board
+  const handleDeleteTask = (id: string) => {
+    if (!activeBoardId) return;
+    setBoards(boards.map(b => b.id === activeBoardId ? { ...b, tasks: b.tasks.filter(t => t.id !== id) } : b));
+    if (editingTask && editingTask.id === id) {
+      setIsModalOpen(false);
+      setEditingTask(null);
+    }
+  };
+
+  // Open modal to add or edit
+  const openEditModal = (task: KanbanTask) => {
+    setEditingTask({ ...task });
+    setIsModalOpen(true);
+  };
+
+  // Save changes from modal
+  const saveTaskDetails = () => {
+    if (editingTask && activeBoardId) {
+      setBoards(boards.map(b => b.id === activeBoardId ? {
+        ...b,
+        tasks: b.tasks.map(t => t.id === editingTask.id ? editingTask : t)
+      } : b));
+      setIsModalOpen(false);
+      setEditingTask(null);
+    }
+  };
+
+  // Create a new board
+  const handleCreateBoard = () => {
+    if (!newBoardName.trim()) return;
+    const newBoard: KanbanBoard = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: newBoardName.trim(),
+      emoji: newBoardEmoji,
+      tasks: []
+    };
+    setBoards([...boards, newBoard]);
+    setNewBoardName('');
+    setNewBoardEmoji('Folder');
+    setShowNewBoardIconPopover(false);
+    setShowNewBoardModal(false);
+    setActiveBoardId(newBoard.id);
+  };
+
+  // Delete a board
+  const handleDeleteBoard = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (confirm('Are you sure you want to delete this board? All tasks in this board will be lost.')) {
+      setBoards(boards.filter(b => b.id !== id));
+      if (activeBoardId === id) {
+        setActiveBoardId(null);
+      }
+      if (editingBoardId === id) {
+        setEditingBoardId(null);
+      }
+    }
+  };
+
+  // Update an existing board
+  const handleUpdateBoard = () => {
+    if (!editBoardName.trim() || !editingBoardId) return;
+    setBoards(boards.map(b => b.id === editingBoardId ? {
+      ...b,
+      name: editBoardName.trim(),
+      emoji: editBoardEmoji,
+      color: editBoardColor
+    } : b));
+    setEditingBoardId(null);
+  };
+
+  // Helper to render columns colors
+  const getColColor = (colId: string) => {
+    if (colId === 'todo') return '#ffb703';
+    if (colId === 'in-progress') return '#3b82f6';
+    return '#22c55e';
+  };
+
+  const getColBgColor = (colId: string) => {
+    if (colId === 'todo') return 'rgba(255, 183, 3, 0.1)';
+    if (colId === 'in-progress') return 'rgba(59, 130, 246, 0.1)';
+    return 'rgba(34, 197, 94, 0.1)';
+  };
+
+  const getColName = (colId: string) => {
+    if (colId === 'todo') return 'To Do';
+    if (colId === 'in-progress') return 'In Progress';
+    return 'Done';
+  };
+
+  const getPriorityColor = (priority?: string) => {
+    if (priority === 'high') return 'rgba(255, 107, 107, 0.15)';
+    if (priority === 'medium') return 'rgba(255, 183, 3, 0.15)';
+    if (priority === 'low') return 'rgba(59, 130, 246, 0.15)';
+    return 'transparent';
+  };
+
+  const getPriorityTextColor = (priority?: string) => {
+    if (priority === 'high') return '#ff6b6b';
+    if (priority === 'medium') return '#ffb703';
+    if (priority === 'low') return '#3b82f6';
+    return 'var(--muted)';
+  };
+
+  // State A: Dashboard View (activeBoardId === null)
+  if (activeBoardId === null) {
+    const filteredBoards = boards.filter(b => 
+      b.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    return (
+      <div className="kanban-layout-wrapper">
+        {/* Dashboard Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px', flexShrink: 0, flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: '26px', color: 'var(--heading)', fontWeight: 700, fontFamily: 'Outfit' }}>Kanban Workspace</h2>
+            <p style={{ margin: '4px 0 0 0', fontSize: '13.5px', color: 'var(--muted)' }}>Select a board to manage your tasks or create a new one.</p>
+          </div>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }} />
+              <input 
+                type="text" 
+                placeholder="Search boards..." 
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                style={{
+                  padding: '8px 16px 8px 36px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)',
+                  background: 'rgba(255,255,255,0.02)',
+                  color: 'var(--fg)',
+                  fontSize: '13.5px',
+                  width: '220px',
+                  outline: 'none',
+                  transition: 'all 0.2s'
+                }}
+                onFocus={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.currentTarget.style.borderColor = 'var(--border)'}
+              />
+            </div>
+            <button 
+              onClick={() => {
+                setNewBoardName('');
+                const keys = Object.keys(BOARD_ICONS);
+                setNewBoardEmoji(keys[Math.floor(Math.random() * keys.length)]);
+                setShowNewBoardModal(true);
+              }}
+              className="btn btn-primary"
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', padding: '8px 16px', borderRadius: '8px' }}
+            >
+              <Plus size={16} /> New Board
             </button>
           </div>
-        ))}
-        {columnId === 'todo' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-             <input type="text" value={newTaskText} onChange={e => setNewTaskText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addTask(); }} placeholder="New task..." style={{ background: 'transparent', border: '1px dashed var(--border)', borderRadius: '8px', padding: '10px', color: 'var(--fg)', fontSize: '13px', outline: 'none' }} />
+        </div>
+
+        {/* Boards Grid */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 8px 32px 8px', margin: '0 -8px' }}>
+          {filteredBoards.length === 0 && searchQuery ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', color: 'var(--muted)' }}>
+              <p>No boards match your search.</p>
+            </div>
+          ) : (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+              gap: '24px'
+            }}>
+              {filteredBoards.map(board => {
+                const todoCount = board.tasks.filter(t => t.column === 'todo').length;
+                const progressCount = board.tasks.filter(t => t.column === 'in-progress').length;
+                const doneCount = board.tasks.filter(t => t.column === 'done').length;
+
+                return (
+                  <div
+                    key={board.id}
+                    onClick={() => setActiveBoardId(board.id)}
+                    style={{
+                      background: board.color ? `${board.color}10` : 'rgba(255, 255, 255, 0.015)',
+                      border: `1px solid ${board.color ? `${board.color}40` : 'rgba(255, 255, 255, 0.05)'}`,
+                      borderRadius: '16px',
+                      padding: '24px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '16px',
+                      position: 'relative',
+                      transition: 'all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)'
+                    }}
+                    className="board-card"
+                    onMouseEnter={e => {
+                      e.currentTarget.style.transform = 'translateY(-6px)';
+                      e.currentTarget.style.background = board.color ? `${board.color}20` : 'rgba(255, 255, 255, 0.03)';
+                      e.currentTarget.style.borderColor = board.color || 'var(--accent)';
+                      e.currentTarget.style.boxShadow = board.color ? `0 12px 24px ${board.color}30` : '0 12px 24px rgba(0,0,0,0.15)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.background = board.color ? `${board.color}10` : 'rgba(255, 255, 255, 0.015)';
+                      e.currentTarget.style.borderColor = board.color ? `${board.color}40` : 'rgba(255, 255, 255, 0.05)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    {/* Edit Board Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditBoardName(board.name);
+                        setEditBoardEmoji(board.emoji);
+                        setEditBoardColor(board.color);
+                        setEditingBoardId(board.id);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: '16px',
+                        right: '16px',
+                        background: 'none',
+                        border: 'none',
+                        color: board.color || 'var(--muted)',
+                        cursor: 'pointer',
+                        transition: 'opacity 0.2s, background 0.2s',
+                        padding: '6px',
+                        borderRadius: '6px'
+                      }}
+                      className="edit-board-btn"
+                      onMouseEnter={e => {
+                        e.currentTarget.style.background = board.color ? `${board.color}20` : 'rgba(255, 255, 255, 0.1)';
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.background = 'none';
+                      }}
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                    {/* Hover Styles injection to display edit button */}
+                    <style>{`
+                      .edit-board-btn {
+                        opacity: 0;
+                      }
+                      .board-card:hover .edit-board-btn {
+                        opacity: 0.5;
+                      }
+                      .board-card:hover .edit-board-btn:hover {
+                        opacity: 1;
+                      }
+                    `}</style>
+
+                    <div style={{ display: 'flex', alignItems: 'center', height: '40px', color: board.color || 'var(--accent)' }}>
+                      <BoardIcon iconName={board.emoji} size={36} color="currentColor" />
+                    </div>
+                    <div style={{ fontWeight: 600, fontSize: '18px', color: 'var(--heading)', fontFamily: 'Outfit', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', letterSpacing: '-0.3px' }}>
+                      {board.name}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: 'auto' }}>
+                      <span style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--muted)' }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#ffb703' }}></span>
+                        {todoCount} To Do
+                      </span>
+                      <span style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--muted)' }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#3b82f6' }}></span>
+                        {progressCount} In Progress
+                      </span>
+                      <span style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--muted)' }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22c55e' }}></span>
+                        {doneCount} Done
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Create Board Card */}
+              <div
+                onClick={() => {
+                  setNewBoardName('');
+                  const keys = Object.keys(BOARD_ICONS);
+                  setNewBoardEmoji(keys[Math.floor(Math.random() * keys.length)]);
+                  setShowNewBoardModal(true);
+                }}
+                style={{
+                  border: '1px dashed rgba(255, 255, 255, 0.1)',
+                  borderRadius: '16px',
+                  padding: '24px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: '160px',
+                  gap: '12px',
+                  color: 'var(--muted)',
+                  transition: 'all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)',
+                  background: 'transparent'
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.borderColor = 'var(--accent)';
+                  e.currentTarget.style.color = 'var(--accent)';
+                  e.currentTarget.style.background = 'rgba(255, 183, 3, 0.02)';
+                  e.currentTarget.style.transform = 'translateY(-6px)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                  e.currentTarget.style.color = 'var(--muted)';
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.transform = 'translateY(0)';
+                }}
+              >
+                <Plus size={28} />
+                <span style={{ fontSize: '15px', fontWeight: 500 }}>Create new board</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Create Board Modal */}
+        {showNewBoardModal && (
+          <div className="settings-overlay" style={{ zIndex: 300 }} onClick={() => setShowNewBoardModal(false)}>
+            <div className="settings-modal" style={{ maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontFamily: 'Outfit', fontWeight: 700 }}>New Board</h3>
+                <button onClick={() => setShowNewBoardModal(false)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4 }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <div style={{ position: 'relative', flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowNewBoardIconPopover(!showNewBoardIconPopover)}
+                      style={{
+                        width: '48px', 
+                        height: '40px', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        border: '1px solid var(--border)', 
+                        borderRadius: '8px', 
+                        background: 'rgba(0,0,0,0.15)',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'rgba(0,0,0,0.15)'}
+                    >
+                      <BoardIcon iconName={newBoardEmoji || 'Folder'} size={24} />
+                    </button>
+
+                    {showNewBoardIconPopover && (
+                      <>
+                        <div 
+                          onClick={() => setShowNewBoardIconPopover(false)} 
+                          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 310 }}
+                        />
+                        <div style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          marginTop: '8px',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '12px',
+                          padding: '12px',
+                          zIndex: 311,
+                          width: '220px',
+                          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(4, 1fr)',
+                          gap: '8px'
+                        }}>
+                          {Object.keys(BOARD_ICONS).map(iconKey => {
+                            const IconComponent = BOARD_ICONS[iconKey];
+                            const isSelected = newBoardEmoji === iconKey;
+                            return (
+                              <button
+                                key={iconKey}
+                                type="button"
+                                onClick={() => {
+                                  setNewBoardEmoji(iconKey);
+                                  setShowNewBoardIconPopover(false);
+                                }}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  borderRadius: '6px',
+                                  border: '1px solid',
+                                  borderColor: isSelected ? 'var(--accent)' : 'transparent',
+                                  background: isSelected ? 'rgba(255, 183, 3, 0.1)' : 'transparent',
+                                  color: isSelected ? 'var(--accent)' : 'var(--muted)',
+                                  cursor: 'pointer',
+                                  padding: '6px',
+                                  aspectRatio: '1',
+                                  transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={e => {
+                                  if (!isSelected) {
+                                    e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                                    e.currentTarget.style.color = 'var(--heading)';
+                                  }
+                                }}
+                                onMouseLeave={e => {
+                                  if (!isSelected) {
+                                    e.currentTarget.style.background = 'transparent';
+                                    e.currentTarget.style.color = 'var(--muted)';
+                                  }
+                                }}
+                              >
+                                <IconComponent size={16} />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Board Title (e.g. Work Planner)"
+                    value={newBoardName}
+                    onChange={e => setNewBoardName(e.target.value)}
+                    autoFocus
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') handleCreateBoard();
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border)',
+                      background: 'rgba(0,0,0,0.15)',
+                      color: 'var(--fg)',
+                      fontSize: '14.5px',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '8px' }}>
+                  <button onClick={() => setShowNewBoardModal(false)} className="btn btn-secondary" style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '13.5px' }}>
+                    Cancel
+                  </button>
+                  <button onClick={handleCreateBoard} className="btn btn-primary" style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '13.5px' }} disabled={!newBoardName.trim()}>
+                    Create Board
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Board Modal */}
+        {editingBoardId && (
+          <div className="settings-overlay" style={{ zIndex: 300 }} onClick={() => setEditingBoardId(null)}>
+            <div className="settings-modal" style={{ maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <h3 style={{ margin: 0, fontSize: '18px', fontFamily: 'Outfit', fontWeight: 700 }}>Edit Board</h3>
+                <button onClick={() => setEditingBoardId(null)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4 }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <div style={{ position: 'relative', flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowEditBoardIconPopover(!showEditBoardIconPopover)}
+                      style={{
+                        width: '48px', 
+                        height: '40px', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        border: '1px solid var(--border)', 
+                        borderRadius: '8px', 
+                        background: editBoardColor ? `${editBoardColor}20` : 'rgba(0,0,0,0.15)',
+                        borderColor: editBoardColor ? `${editBoardColor}40` : 'var(--border)',
+                        color: editBoardColor || 'inherit',
+                        cursor: 'pointer',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = editBoardColor ? `${editBoardColor}30` : 'rgba(255,255,255,0.05)'}
+                      onMouseLeave={e => e.currentTarget.style.background = editBoardColor ? `${editBoardColor}20` : 'rgba(0,0,0,0.15)'}
+                    >
+                      <BoardIcon iconName={editBoardEmoji || 'Folder'} size={24} color={editBoardColor || 'currentColor'} />
+                    </button>
+
+                    {showEditBoardIconPopover && (
+                      <>
+                        <div 
+                          onClick={() => setShowEditBoardIconPopover(false)} 
+                          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 310 }}
+                        />
+                        <div style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          marginTop: '8px',
+                          background: 'var(--panel)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '12px',
+                          padding: '12px',
+                          zIndex: 311,
+                          width: '220px',
+                          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(4, 1fr)',
+                          gap: '8px'
+                        }}>
+                          {Object.keys(BOARD_ICONS).map(iconKey => {
+                            const IconComponent = BOARD_ICONS[iconKey];
+                            const isSelected = editBoardEmoji === iconKey;
+                            return (
+                              <button
+                                key={iconKey}
+                                type="button"
+                                onClick={() => {
+                                  setEditBoardEmoji(iconKey);
+                                  setShowEditBoardIconPopover(false);
+                                }}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  borderRadius: '6px',
+                                  border: '1px solid',
+                                  borderColor: isSelected ? 'var(--accent)' : 'transparent',
+                                  background: isSelected ? 'rgba(255, 183, 3, 0.1)' : 'transparent',
+                                  color: isSelected ? 'var(--accent)' : 'var(--muted)',
+                                  cursor: 'pointer',
+                                  padding: '6px',
+                                  aspectRatio: '1',
+                                  transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={e => {
+                                  if (!isSelected) {
+                                    e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                                    e.currentTarget.style.color = 'var(--heading)';
+                                  }
+                                }}
+                                onMouseLeave={e => {
+                                  if (!isSelected) {
+                                    e.currentTarget.style.background = 'transparent';
+                                    e.currentTarget.style.color = 'var(--muted)';
+                                  }
+                                }}
+                              >
+                                <IconComponent size={16} />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Board Title"
+                    value={editBoardName}
+                    onChange={e => setEditBoardName(e.target.value)}
+                    autoFocus
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') handleUpdateBoard();
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border)',
+                      background: 'rgba(0,0,0,0.15)',
+                      color: 'var(--fg)',
+                      fontSize: '14.5px',
+                      outline: 'none',
+                      borderColor: editBoardColor ? `${editBoardColor}40` : 'var(--border)'
+                    }}
+                  />
+                </div>
+
+                {/* Color Picker */}
+                <div>
+                  <div style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '8px' }}>Board Color</div>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => setEditBoardColor(undefined)}
+                      style={{
+                        width: '28px', height: '28px', borderRadius: '50%', border: '1px solid var(--border)',
+                        background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: !editBoardColor ? '0 0 0 2px var(--panel), 0 0 0 4px var(--accent)' : 'none',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {!editBoardColor && <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: 'var(--accent)' }} />}
+                    </button>
+                    {BOARD_COLORS.map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setEditBoardColor(c)}
+                        style={{
+                          width: '28px', height: '28px', borderRadius: '50%', border: 'none',
+                          background: c, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          boxShadow: editBoardColor === c ? `0 0 0 2px var(--panel), 0 0 0 4px ${c}` : 'none',
+                          transition: 'all 0.2s'
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', marginTop: '8px' }}>
+                  <button 
+                    onClick={() => handleDeleteBoard(editingBoardId, undefined)} 
+                    className="btn" 
+                    style={{ 
+                      padding: '8px 16px', borderRadius: '8px', fontSize: '13.5px', 
+                      color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.1)', border: 'none', cursor: 'pointer' 
+                    }}
+                  >
+                    Delete Board
+                  </button>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={() => setEditingBoardId(null)} className="btn btn-secondary" style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '13.5px' }}>
+                      Cancel
+                    </button>
+                    <button onClick={handleUpdateBoard} className="btn btn-primary" style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '13.5px', background: editBoardColor || 'var(--accent)', color: editBoardColor ? '#fff' : 'var(--bg)' }} disabled={!editBoardName.trim()}>
+                      Save Changes
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>
-    </div>
-  );
+    );
+  }
+
+  // State B: Active Board View (activeBoardId !== null)
+  const activeBoard = boards.find(b => b.id === activeBoardId);
+  if (!activeBoard) {
+    setActiveBoardId(null);
+    return null;
+  }
+
+  const filteredTasks = activeBoard.tasks.filter(task => {
+    const textMatch = task.text.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                      (task.description || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const tagMatch = (task.tags || []).some(t => t.toLowerCase().includes(searchQuery.toLowerCase()));
+    return textMatch || tagMatch;
+  });
+
+  const columns = ['todo', 'in-progress', 'done'];
 
   return (
-    <div style={{ height: '100%', padding: '20px', display: 'flex', gap: '16px', overflowX: 'auto' }}>
-      {renderColumn('todo', 'To Do', 'var(--accent)')}
-      {renderColumn('in-progress', 'In Progress', '#3b82f6')}
-      {renderColumn('done', 'Done', '#22c55e')}
+    <div className="kanban-layout-wrapper">
+      {/* Header Info */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexShrink: 0, flexWrap: 'wrap', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {/* Back Button */}
+          <button
+            onClick={() => { setActiveBoardId(null); setSearchQuery(''); }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--muted)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '8px',
+              borderRadius: '8px',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+              e.currentTarget.style.color = 'var(--heading)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'none';
+              e.currentTarget.style.color = 'var(--muted)';
+            }}
+          >
+            <ChevronLeft size={20} />
+          </button>
+
+          {/* Breadcrumb Editable title */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* Click to change Emoji */}
+            {/* Click to change Icon */}
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <button
+                onClick={() => setShowIconPopover(!showIconPopover)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '6px',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'background 0.2s'
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'none'}
+              >
+                <BoardIcon iconName={activeBoard.emoji || 'Folder'} size={24} />
+              </button>
+              
+              {showIconPopover && (
+                <>
+                  <div 
+                    onClick={() => setShowIconPopover(false)} 
+                    style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 }}
+                  />
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    marginTop: '8px',
+                    background: 'var(--panel)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '12px',
+                    padding: '12px',
+                    zIndex: 101,
+                    width: '220px',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, 1fr)',
+                    gap: '8px'
+                  }}>
+                    {Object.keys(BOARD_ICONS).map(iconKey => {
+                      const IconComponent = BOARD_ICONS[iconKey];
+                      const isSelected = activeBoard.emoji === iconKey;
+                      return (
+                        <button
+                          key={iconKey}
+                          onClick={() => {
+                            setBoards(boards.map(b => b.id === activeBoard.id ? { ...b, emoji: iconKey } : b));
+                            setShowIconPopover(false);
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderRadius: '6px',
+                            border: '1px solid',
+                            borderColor: isSelected ? 'var(--accent)' : 'transparent',
+                            background: isSelected ? 'rgba(255, 183, 3, 0.1)' : 'transparent',
+                            color: isSelected ? 'var(--accent)' : 'var(--muted)',
+                            cursor: 'pointer',
+                            padding: '6px',
+                            aspectRatio: '1',
+                            transition: 'all 0.2s'
+                          }}
+                          onMouseEnter={e => {
+                            if (!isSelected) {
+                              e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+                              e.currentTarget.style.color = 'var(--heading)';
+                            }
+                          }}
+                          onMouseLeave={e => {
+                            if (!isSelected) {
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.color = 'var(--muted)';
+                            }
+                          }}
+                        >
+                          <IconComponent size={16} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <input 
+              type="text" 
+              value={activeBoard.name}
+              onChange={e => {
+                setBoards(boards.map(b => b.id === activeBoard.id ? { ...b, name: e.target.value } : b));
+              }}
+              placeholder="Untitled Board"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                borderBottom: '1px solid transparent',
+                color: 'var(--heading)',
+                fontSize: '20px',
+                fontWeight: 700,
+                outline: 'none',
+                width: '240px',
+                fontFamily: 'Outfit',
+                transition: 'border-color 0.2s'
+              }}
+              onFocus={e => e.currentTarget.style.borderBottomColor = 'var(--border)'}
+              onBlur={e => e.currentTarget.style.borderBottomColor = 'transparent'}
+            />
+          </div>
+        </div>
+
+        {/* Search & New Task buttons */}
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted)' }} />
+            <input 
+              type="text" 
+              placeholder="Search tasks or tags..." 
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{
+                padding: '8px 16px 8px 36px',
+                borderRadius: '8px',
+                border: '1px solid var(--border)',
+                background: 'rgba(255,255,255,0.02)',
+                color: 'var(--fg)',
+                fontSize: '13.5px',
+                width: '220px',
+                outline: 'none',
+                transition: 'all 0.2s'
+              }}
+              onFocus={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+              onBlur={e => e.currentTarget.style.borderColor = 'var(--border)'}
+            />
+          </div>
+          <button 
+            onClick={() => {
+              const blankTask: KanbanTask = {
+                id: Math.random().toString(36).substr(2, 9),
+                text: 'New Task',
+                column: 'todo',
+                description: '',
+                priority: 'none',
+                dueDate: '',
+                tags: []
+              };
+              openEditModal(blankTask);
+            }}
+            className="btn btn-primary"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13.5px', padding: '8px 16px', borderRadius: '8px' }}
+          >
+            <Plus size={16} /> New Task
+          </button>
+        </div>
+      </div>
+
+      {/* Columns Grid */}
+      <div style={{ flex: 1, display: 'flex', gap: '20px', overflowX: 'auto', paddingBottom: '16px', minHeight: 0 }}>
+        {columns.map(colId => {
+          const colTasks = filteredTasks.filter(t => t.column === colId);
+          const colColor = getColColor(colId);
+          const colBgColor = getColBgColor(colId);
+          const colName = getColName(colId);
+
+          return (
+            <div 
+              key={colId}
+              onDragOver={handleDragOver}
+              onDrop={(e) => handleDrop(e, colId)}
+              style={{
+                flex: 1,
+                minWidth: '280px',
+                background: 'rgba(255,255,255,0.01)',
+                border: '1px solid var(--border)',
+                borderRadius: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                height: '100%',
+                overflow: 'hidden'
+              }}
+            >
+              {/* Column Header */}
+              <div style={{ padding: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.01)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ 
+                    fontSize: '12px', 
+                    fontWeight: 600, 
+                    color: colColor, 
+                    background: colBgColor, 
+                    padding: '4px 10px', 
+                    borderRadius: '12px',
+                    letterSpacing: '0.5px'
+                  }}>
+                    {colName}
+                  </span>
+                  <span style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 500 }}>{colTasks.length}</span>
+                </div>
+                <button 
+                  onClick={() => setInlineAddCol(colId)}
+                  style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', display: 'flex', padding: '4px', borderRadius: '4px' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+
+              {/* Tasks List */}
+              <div style={{ flex: 1, padding: '16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }} className="hide-scrollbar">
+                {colTasks.map(task => (
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, task.id)}
+                    onDragEnd={handleDragEnd}
+                    onClick={() => openEditModal(task)}
+                    style={{
+                      background: 'var(--panel)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '10px',
+                      padding: '16px',
+                      cursor: 'grab',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                      transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px'
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                      e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                      e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.25)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.transform = 'translateY(0)';
+                      e.currentTarget.style.borderColor = 'var(--border)';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--heading)', lineHeight: 1.4 }}>{task.text}</span>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }} 
+                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 0, alignSelf: 'flex-start', opacity: 0.5 }}
+                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                        onMouseLeave={e => e.currentTarget.style.opacity = '0.5'}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+
+                    {/* Description Indicator */}
+                    {task.description && (
+                      <p style={{ margin: 0, fontSize: '12px', color: 'var(--muted)', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.4 }}>
+                        {task.description}
+                      </p>
+                    )}
+
+                    {/* Metadata Footer (Tags, Due Date, Priority) */}
+                    {(task.dueDate || (task.tags && task.tags.length > 0) || (task.priority && task.priority !== 'none')) && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px', alignItems: 'center' }}>
+                        {/* Priority */}
+                        {task.priority && task.priority !== 'none' && (
+                          <span style={{ 
+                            fontSize: '10px', 
+                            fontWeight: 600, 
+                            textTransform: 'uppercase',
+                            background: getPriorityColor(task.priority), 
+                            color: getPriorityTextColor(task.priority),
+                            padding: '2px 6px',
+                            borderRadius: '4px'
+                          }}>
+                            {task.priority}
+                          </span>
+                        )}
+
+                        {/* Due Date */}
+                        {task.dueDate && (
+                          <span style={{ 
+                            fontSize: '10.5px', 
+                            color: 'var(--muted)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            background: 'rgba(255,255,255,0.02)',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            border: '1px solid var(--border)'
+                          }}>
+                            <Calendar size={10} />
+                            {new Date(task.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </span>
+                        )}
+
+                        {/* Tags */}
+                        {task.tags && task.tags.map(tag => (
+                          <span key={tag} style={{ 
+                            fontSize: '10.5px', 
+                            color: 'var(--accent)',
+                            background: 'rgba(255,183,3,0.06)',
+                            border: '1px solid rgba(255,183,3,0.15)',
+                            padding: '1px 6px',
+                            borderRadius: '4px'
+                          }}>
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* Inline Add Task Row */}
+                {inlineAddCol === colId ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(255,255,255,0.01)', padding: '8px', borderRadius: '8px', border: '1px dashed var(--border)' }}>
+                    <input 
+                      type="text" 
+                      value={inlineAddText}
+                      onChange={e => setInlineAddText(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          handleAddTask(colId, inlineAddText);
+                          setInlineAddText('');
+                          setInlineAddCol(null);
+                        } else if (e.key === 'Escape') {
+                          setInlineAddCol(null);
+                          setInlineAddText('');
+                        }
+                      }}
+                      placeholder="Type a title..."
+                      autoFocus
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--fg)',
+                        fontSize: '13.5px',
+                        outline: 'none',
+                        padding: '4px'
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                      <button 
+                        onClick={() => { setInlineAddCol(null); setInlineAddText(''); }} 
+                        className="btn btn-secondary" 
+                        style={{ padding: '4px 8px', fontSize: '11px' }}
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={() => {
+                          handleAddTask(colId, inlineAddText);
+                          setInlineAddText('');
+                          setInlineAddCol(null);
+                        }} 
+                        className="btn btn-primary" 
+                        style={{ padding: '4px 8px', fontSize: '11px' }}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setInlineAddCol(colId)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--muted)',
+                      fontSize: '13.5px',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      width: '100%',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.background = 'rgba(255,255,255,0.02)';
+                      e.currentTarget.style.color = 'var(--heading)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background = 'transparent';
+                      e.currentTarget.style.color = 'var(--muted)';
+                    }}
+                  >
+                    <Plus size={14} /> Add a card
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Notion-Style Page Peek Modal */}
+      {isModalOpen && editingTask && (
+        <div 
+          className="settings-overlay" 
+          style={{ zIndex: 200 }}
+          onClick={saveTaskDetails}
+        >
+          <div 
+            className="settings-modal" 
+            style={{ 
+              maxWidth: '560px', 
+              width: '90%', 
+              display: 'flex', 
+              flexDirection: 'column', 
+              gap: '20px', 
+              padding: '24px',
+              borderRadius: '16px',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.5)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px', color: 'var(--muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Task Details
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <button 
+                  onClick={() => handleDeleteTask(editingTask.id)} 
+                  style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', padding: '4px 8px', borderRadius: '6px' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,107,107,0.1)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                >
+                  <Trash2 size={14} /> Delete
+                </button>
+                <button onClick={saveTaskDetails} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4 }}>
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Editable Title */}
+            <input 
+              type="text" 
+              value={editingTask.text}
+              onChange={e => setEditingTask({ ...editingTask, text: e.target.value })}
+              placeholder="Untitled Task"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                borderBottom: '1px solid transparent',
+                color: 'var(--heading)',
+                fontSize: '22px',
+                fontWeight: 700,
+                outline: 'none',
+                width: '100%',
+                paddingBottom: '4px',
+                fontFamily: 'Outfit',
+                transition: 'border-color 0.2s'
+              }}
+              onFocus={e => e.currentTarget.style.borderBottomColor = 'var(--border)'}
+              onBlur={e => e.currentTarget.style.borderBottomColor = 'transparent'}
+            />
+
+            {/* Properties Form (Notion Style Grid) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '16px', borderBottom: '1px solid var(--border)', paddingBottom: '20px' }}>
+              {/* Status */}
+              <div style={{ fontSize: '13.5px', color: 'var(--muted)', display: 'flex', alignItems: 'center' }}>Status</div>
+              <div>
+                <select 
+                  value={editingTask.column}
+                  onChange={e => setEditingTask({ ...editingTask, column: e.target.value })}
+                  style={{
+                    background: 'var(--panel)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--fg)',
+                    borderRadius: '6px',
+                    padding: '6px 12px',
+                    fontSize: '13.5px',
+                    cursor: 'pointer',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="todo">To Do</option>
+                  <option value="in-progress">In Progress</option>
+                  <option value="done">Done</option>
+                </select>
+              </div>
+
+              {/* Priority */}
+              <div style={{ fontSize: '13.5px', color: 'var(--muted)', display: 'flex', alignItems: 'center' }}>Priority</div>
+              <div>
+                <select 
+                  value={editingTask.priority || 'none'}
+                  onChange={e => setEditingTask({ ...editingTask, priority: e.target.value as any })}
+                  style={{
+                    background: 'var(--panel)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--fg)',
+                    borderRadius: '6px',
+                    padding: '6px 12px',
+                    fontSize: '13.5px',
+                    cursor: 'pointer',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="none">None</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </div>
+
+              {/* Due Date */}
+              <div style={{ fontSize: '13.5px', color: 'var(--muted)', display: 'flex', alignItems: 'center' }}>Due Date</div>
+              <div>
+                <input 
+                  type="date"
+                  value={editingTask.dueDate || ''}
+                  onChange={e => setEditingTask({ ...editingTask, dueDate: e.target.value })}
+                  style={{
+                    background: 'var(--panel)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--fg)',
+                    borderRadius: '6px',
+                    padding: '5px 12px',
+                    fontSize: '13.5px',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+
+              {/* Tags */}
+              <div style={{ fontSize: '13.5px', color: 'var(--muted)', display: 'flex', alignItems: 'center' }}>Tags</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <input 
+                  type="text"
+                  placeholder="Add tags (separated by commas)..."
+                  value={(editingTask.tags || []).join(', ')}
+                  onChange={e => {
+                    const tagList = e.target.value.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
+                    setEditingTask({ ...editingTask, tags: tagList });
+                  }}
+                  style={{
+                    background: 'var(--panel)',
+                    border: '1px solid var(--border)',
+                    color: 'var(--fg)',
+                    borderRadius: '6px',
+                    padding: '6px 12px',
+                    fontSize: '13.5px',
+                    width: '100%',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Description/Notes Area */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', flex: 1 }}>
+              <label style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--heading)' }}>Description & Notes</label>
+              <textarea 
+                placeholder="Add details, checklists, or comments for this task..."
+                value={editingTask.description || ''}
+                onChange={e => setEditingTask({ ...editingTask, description: e.target.value })}
+                style={{
+                  background: 'rgba(0,0,0,0.15)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  color: 'var(--fg)',
+                  fontSize: '14px',
+                  padding: '12px',
+                  minHeight: '120px',
+                  resize: 'vertical',
+                  outline: 'none',
+                  lineHeight: 1.5,
+                  fontFamily: 'Inter, sans-serif'
+                }}
+                onFocus={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+                onBlur={e => e.currentTarget.style.borderColor = 'var(--border)'}
+              />
+            </div>
+
+            {/* Modal Actions */}
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+              <button 
+                onClick={() => { setIsModalOpen(false); setEditingTask(null); }} 
+                className="btn btn-secondary"
+                style={{ fontSize: '13.5px', padding: '8px 16px', borderRadius: '8px' }}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={saveTaskDetails} 
+                className="btn btn-primary"
+                style={{ fontSize: '13.5px', padding: '8px 16px', borderRadius: '8px' }}
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1773,7 +3414,8 @@ function AppContent() {
   
   const [agendas, setAgendas] = useState<Agenda[]>([]);
   const [selectedDateStr, setSelectedDateStr] = useState<string>('');
-  const [kanbanTasks, setKanbanTasks] = useState<{ id: string; text: string; column: string }[]>([]);
+  const [kanbanBoards, setKanbanBoards] = useState<KanbanBoard[]>([]);
+  const [activeKanbanBoardId, setActiveKanbanBoardId] = useState<string | null>(null);
   const [charts, setCharts] = useState<Chart[]>([]);
   const [customInstructions, setCustomInstructions] = useState('');
   const [showProfile, setShowProfile] = useState(false);
@@ -1887,7 +3529,6 @@ function AppContent() {
           if (!sessionId) {
             setActiveSessionId(null);
             setMessages([]);
-            setKanbanTasks([]);
             setCharts([]);
           }
 
@@ -1915,6 +3556,23 @@ function AppContent() {
           
           const c_agendas = await api.getCalendar(currentUser.id);
           setAgendas(Array.isArray(c_agendas) ? c_agendas : []);
+
+          let dbBoards = await api.getData(currentUser.id, 'kanban_boards', null);
+          if (!dbBoards) {
+            const dbTasks = await api.getData(currentUser.id, 'kanban_tasks', []);
+            if (dbTasks && dbTasks.length > 0) {
+              dbBoards = [{
+                id: 'default',
+                name: 'Project Board',
+                emoji: '📋',
+                tasks: dbTasks
+              }];
+              await api.setData(currentUser.id, 'kanban_boards', dbBoards);
+            } else {
+              dbBoards = [];
+            }
+          }
+          setKanbanBoards(Array.isArray(dbBoards) ? dbBoards : []);
         } catch (e) {
           console.error("Failed to load user data", e);
         }
@@ -1937,7 +3595,6 @@ function AppContent() {
       if (!recentlyCreatedSessionRef.current) {
         setActiveSessionId(null);
         setMessages([]);
-        setKanbanTasks([]);
         setCharts([]);
         setDocumentContent('# Deep Research Document\n\nStart a research query to generate a comprehensive blog or document here.');
       }
@@ -1959,12 +3616,11 @@ function AppContent() {
           const idx = newSessions.findIndex(s => s.id === activeSessionId);
           
           const hasMsgs = messages && messages.length > 0;
-          const hasData = kanbanTasks.length > 0 || charts.length > 0;
+          const hasData = charts.length > 0;
 
           if (idx !== -1) {
             newSessions[idx].messages = messages;
             newSessions[idx].data = {
-              kanban: kanbanTasks,
               charts: charts
             };
             newSessions[idx].updatedAt = new Date().toISOString();
@@ -1977,7 +3633,6 @@ function AppContent() {
               type: activeView,
               messages: messages,
               data: {
-                kanban: kanbanTasks,
                 charts: charts
               },
               updatedAt: new Date().toISOString()
@@ -2006,12 +3661,12 @@ function AppContent() {
         if (timeoutId) clearTimeout(timeoutId);
       };
     }
-  }, [messages, kanbanTasks, charts, currentUser, activeView, activeSessionId]);
+  }, [messages, charts, currentUser, activeView, activeSessionId]);
 
 
   const handleSidebarClick = (type: any) => {
     setActiveView(type);
-    if (type === 'research' || type === 'kanban' || type === 'visualizer') {
+    if (type === 'research' || type === 'visualizer') {
       setIsDocPaneOpen(true);
     } else {
       setIsDocPaneOpen(false);
@@ -2040,7 +3695,6 @@ function AppContent() {
       setIsDocPaneOpen(true);
     }
     setMessages([]);
-    setKanbanTasks([]);
     setCharts([]);
     setDocumentContent('# Deep Research Document\n\nStart a research query to generate a comprehensive blog or document here.');
     setActiveSessionId(null);
@@ -2082,7 +3736,6 @@ function AppContent() {
       setDocumentContent(extractedDoc);
       
       const d = session.data || {};
-      setKanbanTasks(Array.isArray(d.kanban) ? d.kanban : []);
       setCharts(Array.isArray(d.charts) ? d.charts : []);
       
       if (currentUser) api.setData(currentUser.id, 'activeSessionId', id);
@@ -2323,7 +3976,6 @@ function AppContent() {
         messages: messages || [], 
         type: activeView, 
         data: {
-          kanban: kanbanTasks,
           charts: charts
         }, 
         updatedAt: new Date().toISOString() 
@@ -2411,7 +4063,6 @@ function AppContent() {
         messages: newMessages, 
         type: activeView, 
         data: {
-          kanban: kanbanTasks,
           charts: charts
         }, 
         updatedAt: new Date().toISOString() 
@@ -2777,8 +4428,22 @@ Do not use any tool to write the document, just output the block.`
                 text,
                 column: 'todo'
               }));
-              setKanbanTasks(prev => {
-                const updated = [...prev, ...newTasks];
+              setKanbanBoards(prev => {
+                let updated = [...prev];
+                if (updated.length === 0) {
+                  updated.push({
+                    id: 'default',
+                    name: 'Project Board',
+                    emoji: '📋',
+                    tasks: newTasks
+                  });
+                } else {
+                  const targetId = activeKanbanBoardId || updated[0].id;
+                  updated = updated.map(b => b.id === targetId ? { ...b, tasks: [...b.tasks, ...newTasks] } : b);
+                }
+                if (currentUser) {
+                  api.setData(currentUser.id, 'kanban_boards', updated);
+                }
                 return updated;
               });
               result = `Successfully added ${tasksToAdd.length} tasks to the Kanban board (To Do column).`;
@@ -3280,7 +4945,7 @@ Do not use any tool to write the document, just output the block.`
                       {isEditingDoc ? <><Eye size={14}/> <span className="hide-mobile">Preview</span></> : <><Edit2 size={14}/> <span className="hide-mobile">Edit</span></>}
                     </button>
                   )}
-                  {activeView !== 'calendar' && (
+                  {activeView !== 'calendar' && activeView !== 'kanban' && (
                     isDocPaneOpen ? (
                       <button className="icon-btn" onClick={() => setIsDocPaneOpen(false)} title="Close Side Panel">
                         <PanelRightClose size={20} />
@@ -3332,6 +4997,18 @@ Do not use any tool to write the document, just output the block.`
             selectedDateStr={selectedDateStr} 
             setSelectedDateStr={setSelectedDateStr} 
           />
+        ) : activeView === 'kanban' ? (
+          <KanbanWidget 
+            boards={kanbanBoards} 
+            setBoards={(newBoards) => {
+              setKanbanBoards(newBoards);
+              if (currentUser) {
+                api.setData(currentUser.id, 'kanban_boards', newBoards);
+              }
+            }}
+            activeBoardId={activeKanbanBoardId}
+            setActiveBoardId={setActiveKanbanBoardId}
+          />
         ) : (
           <div className="research-view">
             <div 
@@ -3365,13 +5042,8 @@ Do not use any tool to write the document, just output the block.`
               className={`research-document ${(!isDocPaneOpen || activeView === 'chat') ? 'collapsed' : ''}`}
               style={(isDocPaneOpen && window.innerWidth > 1024 && activeView !== 'chat') ? { width: `${docPaneWidth}%`, transition: isDragging ? 'none' : 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' } : {}}
             >
-                 <div className="doc-content" style={activeView === 'kanban' || activeView === 'visualizer' ? { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } : {}}>
-                   {activeView === 'kanban' ? (
-                      <KanbanWidget tasks={kanbanTasks} setTasks={(newTasks) => {
-                        ensureSessionExists();
-                        setKanbanTasks(newTasks);
-                      }} />
-                    ) : activeView === 'visualizer' ? (
+                 <div className="doc-content" style={activeView === 'visualizer' ? { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } : {}}>
+                   {activeView === 'visualizer' ? (
                       <ChartWidget charts={charts} setCharts={(newC) => { 
                         ensureSessionExists();
                         setCharts(newC); 
@@ -3658,8 +5330,7 @@ Do not use any tool to write the document, just output the block.`
 
               <div className="setting-group" style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border)' }}>
                 <label style={{ color: 'var(--accent)', fontSize: '14px', fontWeight: 600 }}>QR Login Device Sync</label>
-                <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '12px' }}>Generate a QR Code to instantly log in to Hakuen on your mobile phone or other devices.</p>
-                
+                <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '12px' }}>Generate a QR Code to instantly log in to Hakuen on your mobile phone or other devices.</p>                
                 {qrCodeUrl ? (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border)', textAlign: 'center' }}>
                     <div style={{ padding: '8px', background: '#fff', borderRadius: '8px', display: 'inline-block' }}>
@@ -3686,7 +5357,8 @@ Do not use any tool to write the document, just output the block.`
                         try {
                           const res = await api.generateQrToken(currentUser.id);
                           const customUrl = `http://${res.localIp}:${window.location.port || '5173'}/?qrToken=${res.token}`;
-                          setQrCodeUrl(`https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(customUrl)}&size=200x200`);
+                          const qrDataUrl = await QRCode.toDataURL(customUrl, { width: 200, margin: 2 });
+                          setQrCodeUrl(qrDataUrl);
                           setQrTimer(300); // 5 minutes
                         } catch (err: any) {
                           alert(`Failed to generate QR Code: ${err.message}`);
@@ -3705,7 +5377,8 @@ Do not use any tool to write the document, just output the block.`
                       try {
                         const res = await api.generateQrToken(currentUser.id);
                         const customUrl = `http://${res.localIp}:${window.location.port || '5173'}/?qrToken=${res.token}`;
-                        setQrCodeUrl(`https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(customUrl)}&size=200x200`);
+                        const qrDataUrl = await QRCode.toDataURL(customUrl, { width: 200, margin: 2 });
+                        setQrCodeUrl(qrDataUrl);
                         setQrTimer(300); // 5 minutes
                       } catch (err: any) {
                         alert(`Failed to generate QR Code: ${err.message}`);
