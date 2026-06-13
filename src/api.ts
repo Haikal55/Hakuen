@@ -27,6 +27,51 @@ export const api = {
     await fetch(`${API_URL}/users/${userId}`, { method: 'DELETE' });
   },
 
+  async forgotPassword(email: string) {
+    const res = await fetch(`${API_URL}/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data;
+  },
+
+  async changePassword(userId: any, password: any) {
+    const res = await fetch(`${API_URL}/users/${userId}/password`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data;
+  },
+
+  async generateQrToken(userId: any) {
+    const res = await fetch(`${API_URL}/users/generate-qr-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data;
+  },
+
+  async loginByToken(token: string) {
+    const res = await fetch(`${API_URL}/users/login-by-token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    return data.user;
+  },
+
+
   async getData(userId: any, key: any, defaultValue: any = null) {
     try {
       const res = await fetch(`${API_URL}/data/${userId}/${key}`);
@@ -95,6 +140,34 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename: newFilename })
     });
+  },
+
+  // Calendar Endpoints
+  async getCalendar(userId: any) {
+    const res = await fetch(`${API_URL}/calendar/${userId}`);
+    return await res.json();
+  },
+
+  async addCalendarAgenda(userId: any, agendaData: { dateStr: string, time: string, title: string, color?: string }) {
+    const res = await fetch(`${API_URL}/calendar/${userId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(agendaData)
+    });
+    return await res.json();
+  },
+
+  async editCalendarAgenda(userId: any, agendaId: any, agendaData: { dateStr: string, time: string, title: string, color?: string }) {
+    const res = await fetch(`${API_URL}/calendar/${userId}/${agendaId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(agendaData)
+    });
+    return await res.json();
+  },
+
+  async deleteCalendarAgenda(userId: any, agendaId: any) {
+    await fetch(`${API_URL}/calendar/${userId}/${agendaId}`, { method: 'DELETE' });
   },
 
   // Notes Endpoints

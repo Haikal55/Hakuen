@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 export interface User { id: number; username: string; email: string; }
 export interface Message { id?: string; role: 'user' | 'assistant' | 'system' | 'tool'; content: string; isStreaming?: boolean; internalContent?: string; tool_calls?: any[]; timestamp?: string; executionTime?: number; tokens?: number; }
 export interface KanbanTask { id: string; text: string; column: string; }
-export interface Agenda { dateStr: string; time: string; title: string; }
+export interface Agenda { id?: string; dateStr: string; time: string; title: string; color?: string; }
 export interface NoteTask { text: string; done: boolean; }
 export interface Note { id: string; title: string; type: 'text' | 'todo'; content: string; tasks?: any[]; is_pinned?: boolean; is_archived?: boolean; order_index?: number; created_at?: string; color?: string; bg_image?: string; bg_position?: string; tags?: string; }
 export interface ChartData { name: string; value: number; color?: string; }
@@ -28,8 +28,10 @@ import Tesseract from 'tesseract.js';
 // @ts-ignore
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import { Html5Qrcode } from 'html5-qrcode';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+
 
 const preprocessLaTeX = (content: any) => {
   if (typeof content !== 'string') return '';
@@ -129,23 +131,46 @@ const CodeBlock = ({ node, inline, className, children, setPreviewHtml, ...props
   return <code className={className} style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 4px', borderRadius: '4px' }} {...props}>{children}</code>;
 };
 
-function CalendarWidget({ agendas, setAgendas, selectedDateStr, setSelectedDateStr }: { agendas: Agenda[], setAgendas: (a: Agenda[]) => void, selectedDateStr: string, setSelectedDateStr: (d: string) => void }) {
+function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDeleteAgenda, selectedDateStr, setSelectedDateStr }: { agendas: Agenda[], handleAddAgenda: (a: Agenda) => void, handleEditAgenda: (a: Agenda) => void, handleDeleteAgenda: (a: Agenda) => void, selectedDateStr: string, setSelectedDateStr: (d: string) => void }) {
   const [time, setTime] = useState(new Date());
   const [viewOffset, setViewOffset] = useState(0);
   const [isAddingAgenda, setIsAddingAgenda] = useState(false);
   const [newAgendaTitle, setNewAgendaTitle] = useState('');
   const [newAgendaTime, setNewAgendaTime] = useState('09:00');
-  
+  const [newAgendaColor, setNewAgendaColor] = useState('#3b82f6');
+  const [editingAgendaId, setEditingAgendaId] = useState<string | null>(null);
+
+  const resetForm = () => {
+    setIsAddingAgenda(false);
+    setEditingAgendaId(null);
+    setNewAgendaTitle('');
+    setNewAgendaTime('09:00');
+    setNewAgendaColor('#3b82f6');
+  };
+
+  const handleEditClick = (a: Agenda) => {
+    setEditingAgendaId(a.id || null);
+    setNewAgendaTitle(a.title);
+    setNewAgendaTime(a.time);
+    setNewAgendaColor(a.color || '#3b82f6');
+    setIsAddingAgenda(true);
+  };
+
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const timeStr = time.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
   const currentMonth = time.getMonth();
   const currentYear = time.getFullYear();
   const todayDate = time.getDate();
+  const todayStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(todayDate).padStart(2, '0')}`;
+
+  const activeAgendas = agendas.filter(a => {
+    const agendaDate = new Date(`${a.dateStr}T${a.time}:00`);
+    const oneHourAgo = new Date(time.getTime() - 60 * 60 * 1000);
+    return agendaDate > oneHourAgo;
+  });
 
   const viewDate = new Date(currentYear, currentMonth + viewOffset, 1);
   const viewMonth = viewDate.getMonth();
@@ -161,125 +186,286 @@ function CalendarWidget({ agendas, setAgendas, selectedDateStr, setSelectedDateS
     const prevM = viewMonth === 0 ? 11 : viewMonth - 1;
     const prevY = viewMonth === 0 ? viewYear - 1 : viewYear;
     const dStr = `${prevY}-${String(prevM + 1).padStart(2, '0')}-${String(daysInPrevMonth - i).padStart(2, '0')}`;
-    days.push({ date: daysInPrevMonth - i, isCurrentMonth: false, isToday: false, dateStr: dStr, hasAgenda: agendas.some(a => a.dateStr === dStr) });
+    days.push({ date: daysInPrevMonth - i, isCurrentMonth: false, isToday: false, dateStr: dStr, dayAgendas: activeAgendas.filter(a => a.dateStr === dStr) });
   }
   for (let i = 1; i <= daysInMonth; i++) {
     const dStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-    days.push({ date: i, isCurrentMonth: true, isToday: isCurrentView && i === todayDate, dateStr: dStr, hasAgenda: agendas.some(a => a.dateStr === dStr) });
+    days.push({ date: i, isCurrentMonth: true, isToday: isCurrentView && i === todayDate, dateStr: dStr, dayAgendas: activeAgendas.filter(a => a.dateStr === dStr) });
   }
   const remainingDays = 42 - days.length;
   for (let i = 1; i <= remainingDays; i++) {
     const nextM = viewMonth === 11 ? 0 : viewMonth + 1;
     const nextY = viewMonth === 11 ? viewYear + 1 : viewYear;
     const dStr = `${nextY}-${String(nextM + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-    days.push({ date: i, isCurrentMonth: false, isToday: false, dateStr: dStr, hasAgenda: agendas.some(a => a.dateStr === dStr) });
+    days.push({ date: i, isCurrentMonth: false, isToday: false, dateStr: dStr, dayAgendas: activeAgendas.filter(a => a.dateStr === dStr) });
   }
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px' }}>
-      <div style={{ padding: '32px 24px', background: 'var(--bg)', borderRadius: '24px', border: '1px solid var(--border)', textAlign: 'center', width: '100%' }}>
-        <Calendar size={28} style={{ color: 'var(--accent)', marginBottom: '16px' }} />
-        <div style={{ fontSize: 'clamp(32px, 5vw, 48px)', fontWeight: 'bold', color: 'var(--heading)', fontFamily: 'monospace', letterSpacing: 2, lineHeight: 1 }}>
-          {timeStr}
-        </div>
-        
-        <div style={{ marginTop: '32px', borderTop: '1px solid var(--border)', paddingTop: '24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-            <button className="icon-btn" onClick={() => setViewOffset(prev => prev - 1)}>
-              <ChevronLeft size={20} />
-            </button>
-            <div key={`title-${viewOffset}`} style={{ fontSize: '18px', fontWeight: 'bold', color: 'var(--heading)', animation: 'fadeIn 0.3s ease-out' }}>
-              {viewDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
-            </div>
-            <button className="icon-btn" onClick={() => setViewOffset(prev => prev + 1)}>
-              <ChevronRight size={20} />
-            </button>
-          </div>
-          <div key={`grid-${viewOffset}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '6px', animation: 'fadeIn 0.3s ease-out' }}>
-            {['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'].map(day => (
-              <div key={day} style={{ fontSize: '12px', fontWeight: 'bold', color: '#6b8a94', paddingBottom: '8px' }}>
-                {day}
-              </div>
-            ))}
-            {days.map((d, i) => (
-              <div key={i} onClick={() => setSelectedDateStr(d.dateStr)} style={{
-                padding: '6px',
-                borderRadius: '8px',
-                background: d.isToday ? 'var(--accent)' : (d.isCurrentMonth ? 'rgba(255,255,255,0.03)' : 'transparent'),
-                color: d.isToday ? '#000' : (d.isCurrentMonth ? 'var(--heading)' : 'rgba(255,255,255,0.2)'),
-                fontWeight: d.isToday ? 'bold' : 'normal',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '13px',
-                aspectRatio: '1/1',
-                boxShadow: d.isToday ? '0 4px 12px rgba(var(--accent-rgb), 0.4)' : 'none',
-                cursor: 'pointer',
-                border: selectedDateStr === d.dateStr ? '1px solid var(--accent)' : '1px solid transparent',
-                opacity: (!d.isCurrentMonth && !d.hasAgenda) ? 0.5 : 1
-              }}>
-                <span>{d.date}</span>
-                {d.hasAgenda && <div style={{ width: 4, height: 4, borderRadius: '50%', background: d.isToday ? '#000' : 'var(--accent)', marginTop: 2 }} />}
-              </div>
-            ))}
-          </div>
+  const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
 
-          {/* Agenda Details */}
-          <div style={{ marginTop: 24, textAlign: 'left', borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <h4 style={{ color: 'var(--heading)', margin: 0, fontSize: 14 }}>
-                Agendas for {selectedDateStr || '...'}
-              </h4>
-              {selectedDateStr && (
-                <button 
-                  onClick={() => setIsAddingAgenda(true)}
-                  style={{ background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
-                >
-                  <Plus size={12} /> Add
-                </button>
+  const upcoming = activeAgendas
+    .slice()
+    .sort((a,b) => a.dateStr.localeCompare(b.dateStr) || a.time.localeCompare(b.time))
+    .slice(0, 3);
+
+  const seconds = time.getSeconds();
+  const minutes = time.getMinutes();
+  const hours = time.getHours();
+
+  const secAngle = seconds * 6;
+  const minAngle = minutes * 6 + seconds * 0.1;
+  const hourAngle = (hours % 12) * 30 + minutes * 0.5;
+
+  return (
+    <div className="calendar-layout-wrapper">
+      {/* LEFT: Calendar Content */}
+      <div className="calendar-content-area">
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Calendar size={24} style={{ color: 'var(--accent)' }} />
+            <h2 style={{ margin: 0, fontSize: 20, color: 'var(--heading)' }}>
+              {viewDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
+            </h2>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="icon-btn" onClick={() => setViewOffset(0)} style={{ padding: '6px 12px', fontSize: 13, borderRadius: 8, background: 'rgba(255,255,255,0.05)', color: 'var(--heading)' }}>
+              Today
+            </button>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button className="icon-btn" onClick={() => setViewOffset(prev => prev - 1)}>
+                <ChevronLeft size={20} />
+              </button>
+              <button className="icon-btn" onClick={() => setViewOffset(prev => prev + 1)}>
+                <ChevronRight size={20} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Grid Header */}
+        <div className="calendar-grid-header" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 1, marginBottom: 8, flexShrink: 0 }}>
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+            <div key={day} className="calendar-grid-header-cell" style={{ textAlign: 'center', fontWeight: '600', color: 'var(--muted)', fontSize: 13 }}>
+              {day}
+            </div>
+          ))}
+        </div>
+
+        {/* Grid */}
+        <div className="calendar-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridTemplateRows: 'repeat(6, 1fr)', gap: 8, flex: 1, minHeight: 0 }}>
+          {days.map((d, i) => {
+            let bg = d.isToday ? 'rgba(var(--accent-rgb), 0.1)' : 'rgba(255,255,255,0.02)';
+            if (d.dayAgendas.length > 0) {
+              if (d.dayAgendas.length === 1) {
+                bg = `${d.dayAgendas[0].color || '#3b82f6'}40`; // 25% opacity
+              } else {
+                const c = d.dayAgendas.map((a: Agenda) => (a.color || '#3b82f6') + '40');
+                bg = `linear-gradient(135deg, ${c.join(', ')})`;
+              }
+            }
+            
+            const isPastDate = d.dateStr < todayStr;
+            
+            return (
+              <div 
+                key={i} 
+                onClick={() => { if (!isPastDate) { setSelectedDateStr(d.dateStr); setIsAddingAgenda(false); } }}
+                className="calendar-grid-cell"
+                style={{
+                  background: bg,
+                  border: d.isToday ? '2px solid var(--accent)' : '1px solid rgba(255,255,255,0.04)',
+                  borderRadius: 8,
+                  padding: 8,
+                  opacity: isPastDate ? 0.25 : (d.isCurrentMonth ? 1 : 0.4),
+                  cursor: isPastDate ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                  minWidth: 0,
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}
+                onMouseEnter={e => {
+                  if (!isPastDate) {
+                    e.currentTarget.style.filter = 'brightness(1.2)';
+                    e.currentTarget.style.transform = 'scale(1.02)';
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!isPastDate) {
+                    e.currentTarget.style.filter = 'brightness(1)';
+                    e.currentTarget.style.transform = 'scale(1)';
+                  }
+                }}
+              >
+                <div style={{ fontWeight: d.isToday ? 'bold' : '500', color: d.isToday ? 'var(--accent)' : 'var(--heading)', fontSize: 14 }}>
+                  {d.date}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* RIGHT/TOP: Clock Panel */}
+      <div className="calendar-clock-panel">
+        <svg width="120" height="120" viewBox="0 0 100 100" style={{ filter: 'drop-shadow(0 4px 12px rgba(0,0,0,0.3))', marginBottom: 4 }}>
+          <circle cx="50" cy="50" r="48" fill="rgba(0,0,0,0.2)" stroke="var(--border)" strokeWidth="1.5" />
+          {[...Array(12)].map((_, i) => {
+            const angle = (i * 30 * Math.PI) / 180;
+            const x1 = 50 + 40 * Math.sin(angle);
+            const y1 = 50 - 40 * Math.cos(angle);
+            const x2 = 50 + 44 * Math.sin(angle);
+            const y2 = 50 - 44 * Math.cos(angle);
+            return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--border)" strokeWidth={i % 3 === 0 ? "1.5" : "0.75"} strokeLinecap="round" />;
+          })}
+          <line 
+            x1="50" 
+            y1="50" 
+            x2={50 + 24 * Math.sin(hourAngle * Math.PI / 180)} 
+            y2={50 - 24 * Math.cos(hourAngle * Math.PI / 180)} 
+            stroke="var(--heading)" 
+            strokeWidth="3" 
+            strokeLinecap="round" 
+          />
+          <line 
+            x1="50" 
+            y1="50" 
+            x2={50 + 34 * Math.sin(minAngle * Math.PI / 180)} 
+            y2={50 - 34 * Math.cos(minAngle * Math.PI / 180)} 
+            stroke="var(--fg)" 
+            strokeWidth="2" 
+            strokeLinecap="round" 
+          />
+          <line 
+            x1="50" 
+            y1="50" 
+            x2={50 + 38 * Math.sin(secAngle * Math.PI / 180)} 
+            y2={50 - 38 * Math.cos(secAngle * Math.PI / 180)} 
+            stroke="var(--accent)" 
+            strokeWidth="1" 
+            strokeLinecap="round" 
+          />
+          <circle cx="50" cy="50" r="2.5" fill="var(--accent)" />
+        </svg>
+
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+          <div style={{ fontSize: '24px', fontWeight: '700', fontFamily: 'monospace', color: 'var(--heading)', letterSpacing: '1px' }}>
+            {time.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </div>
+          <div style={{ fontSize: '13px', color: 'var(--muted)', fontWeight: 500, textAlign: 'center', textTransform: 'capitalize' }}>
+            {time.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+          </div>
+        </div>
+
+        <div style={{ width: '100%', borderTop: '1px solid var(--border)', paddingTop: 16, marginTop: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '1px' }}>
+            Upcoming Agendas
+          </div>
+          {upcoming.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--muted)', fontStyle: 'italic', textAlign: 'center', padding: '8px 0' }}>
+              No upcoming agendas
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {upcoming.map((a, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, borderLeft: `3px solid ${a.color || 'var(--accent)'}`, border: '1px solid var(--border)', borderLeftWidth: 3 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</div>
+                    <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{a.dateStr} • {a.time}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Modal Overlay for managing agendas on selected date */}
+      {selectedDateStr && (
+        <div 
+          className="settings-overlay" 
+          style={{ zIndex: 150 }}
+          onClick={() => { setSelectedDateStr(''); resetForm(); }}
+        >
+          <div 
+            className="settings-modal" 
+            style={{ maxWidth: '460px', display: 'flex', flexDirection: 'column', gap: 20 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, color: 'var(--heading)', fontSize: 20 }}>Agendas: {selectedDateStr}</h3>
+              <button onClick={() => { setSelectedDateStr(''); resetForm(); }} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 8, borderRadius: '50%' }} onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} onMouseLeave={e => e.currentTarget.style.background='none'}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ maxHeight: '240px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }} className="hide-scrollbar">
+              {activeAgendas.filter(a => a.dateStr === selectedDateStr).length === 0 ? (
+                <p style={{ color: 'var(--muted)', fontStyle: 'italic', textAlign: 'center', margin: '20px 0' }}>No agendas for this day.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {activeAgendas.filter(a => a.dateStr === selectedDateStr).sort((a,b) => a.time.localeCompare(b.time)).map((a, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 12, background: `linear-gradient(to right, ${a.color || '#3b82f6'}22, rgba(255,255,255,0.02))`, borderRadius: 10, border: '1px solid var(--border)' }}>
+                      <div>
+                        <div style={{ fontWeight: 'bold', color: 'var(--heading)', fontSize: 14 }}>{a.title}</div>
+                        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{a.time}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button onClick={() => handleEditClick(a)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 6, borderRadius: '50%' }} onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} onMouseLeave={e => e.currentTarget.style.background='none'}>
+                          <Edit2 size={16} />
+                        </button>
+                        <button onClick={() => handleDeleteAgenda(a)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 6, borderRadius: '50%' }} onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} onMouseLeave={e => e.currentTarget.style.background='none'}>
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
-            {isAddingAgenda && (
-              <div style={{ marginBottom: 16, background: 'rgba(255,255,255,0.05)', padding: 12, borderRadius: 8 }}>
-                 <input type="time" value={newAgendaTime} onChange={e => setNewAgendaTime(e.target.value)} style={{ width: '100%', marginBottom: 8, padding: 8, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }} />
-                 <input type="text" placeholder="Agenda Title" value={newAgendaTitle} onChange={e => setNewAgendaTitle(e.target.value)} style={{ width: '100%', marginBottom: 8, padding: 8, borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }} />
-                 <div style={{ display: 'flex', gap: 8 }}>
-                   <button onClick={() => {
-                     if (!newAgendaTitle || !newAgendaTime) return;
-                     setAgendas([...agendas, { dateStr: selectedDateStr, time: newAgendaTime, title: newAgendaTitle }]);
-                     setIsAddingAgenda(false);
-                     setNewAgendaTitle('');
-                     setNewAgendaTime('09:00');
-                   }} style={{ background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 4, padding: '6px 12px', fontSize: 12, fontWeight: 'bold', cursor: 'pointer' }}>Save</button>
-                   <button onClick={() => setIsAddingAgenda(false)} style={{ background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-                 </div>
-              </div>
-            )}
-
-            {selectedDateStr && agendas.filter(a => a.dateStr === selectedDateStr).map((a, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.05)', borderRadius: 8, marginBottom: 8, borderLeft: '3px solid var(--accent)' }}>
-                <div style={{ display: 'flex', gap: 12 }}>
-                  <div style={{ color: 'var(--accent)', fontWeight: 'bold', fontSize: 13 }}>{a.time}</div>
-                  <div style={{ color: 'var(--fg)', fontSize: 13 }}>{a.title}</div>
+            {!isAddingAgenda ? (
+              <button onClick={() => { resetForm(); setIsAddingAgenda(true); }} style={{ background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 10, padding: 12, fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 15 }}>
+                <Plus size={18} /> Add New Agenda
+              </button>
+            ) : (
+              <div style={{ background: 'rgba(255,255,255,0.02)', padding: 16, borderRadius: 10, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <h4 style={{ margin: 0, color: 'var(--heading)', fontSize: 16 }}>{editingAgendaId ? 'Edit Agenda' : 'New Agenda'}</h4>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <input type="time" value={newAgendaTime} onChange={e => setNewAgendaTime(e.target.value)} style={{ flex: 1, padding: 8, borderRadius: 6, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.2)', color: 'var(--fg)', fontSize: 14 }} />
+                  <input type="text" placeholder="Agenda Title" value={newAgendaTitle} onChange={e => setNewAgendaTitle(e.target.value)} style={{ flex: 2, padding: 8, borderRadius: 6, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.2)', color: 'var(--fg)', fontSize: 14 }} />
                 </div>
-                <button onClick={() => {
-                  setAgendas(agendas.filter(item => item !== a));
-                }} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 0 }}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-            {(!selectedDateStr || agendas.filter(a => a.dateStr === selectedDateStr).length === 0) && !isAddingAgenda && (
-              <div style={{ fontSize: 13, color: 'var(--muted)', fontStyle: 'italic' }}>
-                {selectedDateStr ? "Tidak ada agenda." : "Pilih tanggal untuk melihat detail."}
+                
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>Tag Color</span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {colors.map(c => (
+                      <button 
+                        key={c} 
+                        onClick={() => setNewAgendaColor(c)}
+                        style={{ width: 20, height: 20, borderRadius: '50%', background: c, border: newAgendaColor === c ? '2px solid white' : 'none', cursor: 'pointer', outline: newAgendaColor === c ? `2px solid ${c}88` : 'none', outlineOffset: 1 }}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => {
+                    if (!newAgendaTitle || !newAgendaTime) return;
+                    if (editingAgendaId) {
+                      handleEditAgenda({ id: editingAgendaId, dateStr: selectedDateStr, time: newAgendaTime, title: newAgendaTitle, color: newAgendaColor });
+                    } else {
+                      handleAddAgenda({ dateStr: selectedDateStr, time: newAgendaTime, title: newAgendaTitle, color: newAgendaColor });
+                    }
+                    resetForm();
+                  }} style={{ flex: 1, background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 6, padding: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: 14 }}>Save</button>
+                  <button onClick={resetForm} style={{ flex: 1, background: 'transparent', color: 'var(--heading)', border: '1px solid var(--border)', borderRadius: 6, padding: 8, cursor: 'pointer', fontSize: 14 }}>Cancel</button>
+                </div>
               </div>
             )}
           </div>
-
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -310,7 +496,7 @@ function NotesWidget({ currentUser, onGenerateAI }: { currentUser: User; onGener
   const [searchQuery, setSearchQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [activeFilter, setActiveFilter] = useState('All');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [viewMode] = useState<'grid' | 'list'>('grid');
 
   useEffect(() => {
     fetchNotes();
@@ -400,9 +586,9 @@ function NotesWidget({ currentUser, onGenerateAI }: { currentUser: User; onGener
     await handleUpdateNote(noteId, {
       title: editTitleValue,
       content: editContentValue,
-      color: editColor,
-      bg_image: editBgImage,
-      bg_position: editBgPosition,
+      color: editColor || undefined,
+      bg_image: editBgImage || undefined,
+      bg_position: editBgPosition || undefined,
       tags: editTags
     });
   };
@@ -1160,15 +1346,32 @@ function LibraryWidget({ libraryFiles, setLibraryFiles, currentUser, onPreviewIm
 }
 
 function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
-  const [isLogin, setIsLogin] = useState(true);
+  const [mode, setMode] = useState<'login' | 'register' | 'qr'>('login');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+
+  // Check if browser context is secure (required for in-app media devices / camera access)
+  const isSecureContext = window.location.protocol === 'https:' || 
+                          window.location.hostname === 'localhost' || 
+                          window.location.hostname === '127.0.0.1';
+
+  useEffect(() => {
+    return () => {
+      // Clean up scanner on unmount
+      if (scannerRef.current && scannerRef.current.isScanning) {
+        scannerRef.current.stop().catch(console.error);
+      }
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isLogin) {
+    setError('');
+    if (mode === 'login') {
       if (!email.trim() || !password.trim()) {
         setError('Email and password are required');
         return;
@@ -1179,7 +1382,7 @@ function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
       } catch (err: any) {
         setError(err.message);
       }
-    } else {
+    } else if (mode === 'register') {
       if (!username.trim() || !email.trim() || !password.trim()) {
         setError('Username, email, and password are required');
         return;
@@ -1193,42 +1396,218 @@ function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
     }
   };
 
+  const startScanning = async () => {
+    setError('');
+    setIsScanning(true);
+    setTimeout(async () => {
+      try {
+        const html5QrCode = new Html5Qrcode("reader");
+        scannerRef.current = html5QrCode;
+        
+        await html5QrCode.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 }
+          },
+          async (decodedText) => {
+            // Found QR Code!
+            let token = decodedText;
+            if (decodedText.startsWith('http')) {
+              try {
+                const url = new URL(decodedText);
+                const tokenParam = url.searchParams.get('qrToken');
+                if (tokenParam) {
+                  token = tokenParam;
+                }
+              } catch (e) {
+                // Not a valid URL structure, use raw decoded text
+              }
+            }
+            
+            // Stop scanner
+            await html5QrCode.stop();
+            setIsScanning(false);
+            
+            // Log in with the token
+            try {
+              const user = await api.loginByToken(token);
+              onLogin(user);
+            } catch (err: any) {
+              setError(`QR Login failed: ${err.message}`);
+            }
+          },
+          () => {
+            // Verbose/silent debug scan error (ignored)
+          }
+        );
+      } catch (err: any) {
+        setIsScanning(false);
+        setError(`Failed to open camera: ${err.message || err}. Ensure you are using HTTPS or localhost, and camera permissions are granted.`);
+      }
+    }, 100);
+  };
+
+  const stopScanning = async () => {
+    if (scannerRef.current && scannerRef.current.isScanning) {
+      try {
+        await scannerRef.current.stop();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    setIsScanning(false);
+  };
+
   return (
     <div style={{ height: '100vh', width: '100vw', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'Inter' }}>
-      <div style={{ width: '100%', maxWidth: '400px', padding: '40px', background: 'var(--panel)', borderRadius: '16px', border: '1px solid var(--border)', boxShadow: '0 16px 40px rgba(0,0,0,0.5)' }}>
+      <div style={{ width: '100%', maxWidth: '420px', padding: '40px', background: 'var(--panel)', borderRadius: '16px', border: '1px solid var(--border)', boxShadow: '0 16px 40px rgba(0,0,0,0.5)' }}>
+        
+        {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <h1 style={{ fontSize: '32px', color: 'var(--heading)', margin: '0 0 8px 0', fontFamily: 'Outfit' }}>Hakuen</h1>
-          <p style={{ color: 'var(--muted)', margin: 0 }}>{isLogin ? 'Welcome back to your AI Assistant' : 'Create your Hakuen account'}</p>
+          <p style={{ color: 'var(--muted)', margin: 0 }}>
+            {mode === 'login' && 'Welcome back to your AI Assistant'}
+            {mode === 'register' && 'Create your Hakuen account'}
+            {mode === 'qr' && 'Log In with QR Code'}
+          </p>
         </div>
         
-        {error && <div style={{ padding: '12px', background: 'rgba(255,107,107,0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', fontSize: '14px', textAlign: 'center', border: '1px solid rgba(255,107,107,0.2)' }}>{error}</div>}
+        {/* Error alert */}
+        {error && (
+          <div style={{ padding: '12px', background: 'rgba(255,107,107,0.1)', color: 'var(--danger)', borderRadius: '8px', marginBottom: '24px', fontSize: '14px', textAlign: 'center', border: '1px solid rgba(255,107,107,0.2)', wordBreak: 'break-word' }}>
+            {error}
+          </div>
+        )}
         
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {!isLogin && (
+        {/* Form rendering based on mode */}
+        {mode === 'login' && (
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500 }}>Email Address</label>
+              <input type="email" value={email} onChange={e => setEmail(e.target.value)} style={{ width: '100%', padding: '12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--fg)', fontSize: '16px', outline: 'none' }} placeholder="Enter your email" />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500 }}>Password</label>
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={{ width: '100%', padding: '12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--fg)', fontSize: '16px', outline: 'none' }} placeholder="Enter password" />
+            </div>
+            <button type="submit" style={{ width: '100%', padding: '14px', background: 'var(--accent)', color: '#000', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', marginTop: '8px', transition: 'background 0.2s' }}>
+              Sign In
+            </button>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '8px 0' }}>
+              <div style={{ flex: 1, height: '1px', background: 'var(--border)' }}></div>
+              <span style={{ fontSize: '12px', color: 'var(--muted)' }}>OR</span>
+              <div style={{ flex: 1, height: '1px', background: 'var(--border)' }}></div>
+            </div>
+            
+            <button 
+              type="button" 
+              onClick={() => { setMode('qr'); setError(''); }} 
+              style={{ width: '100%', padding: '12px', background: 'rgba(255,255,255,0.05)', color: 'var(--fg)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '15px', fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            >
+              <Sparkles size={16} style={{ color: 'var(--accent)' }} /> Log In via QR Code
+            </button>
+          </form>
+        )}
+
+        {mode === 'register' && (
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500 }}>Username</label>
               <input type="text" value={username} onChange={e => setUsername(e.target.value)} style={{ width: '100%', padding: '12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--fg)', fontSize: '16px', outline: 'none' }} placeholder="Enter username" />
             </div>
-          )}
-          <div>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500 }}>Email Address</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} style={{ width: '100%', padding: '12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--fg)', fontSize: '16px', outline: 'none' }} placeholder="Enter your email" />
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500 }}>Email Address</label>
+              <input type="email" value={email} onChange={e => setEmail(e.target.value)} style={{ width: '100%', padding: '12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--fg)', fontSize: '16px', outline: 'none' }} placeholder="Enter your email" />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500 }}>Password</label>
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={{ width: '100%', padding: '12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--fg)', fontSize: '16px', outline: 'none' }} placeholder="Enter password" />
+            </div>
+            <button type="submit" style={{ width: '100%', padding: '14px', background: 'var(--accent)', color: '#000', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', marginTop: '8px', transition: 'background 0.2s' }}>
+              Create Account
+            </button>
+          </form>
+        )}
+
+        {mode === 'qr' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', textAlign: 'center' }}>
+            <p style={{ fontSize: '14px', color: 'var(--muted)', margin: '0 0 8px 0', lineHeight: 1.5 }}>
+              Scan the login QR Code from your logged-in computer profile.
+            </p>
+            
+            {isScanning ? (
+              <div style={{ position: 'relative', width: '100%', aspectRatio: '1', background: '#000', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                <div id="reader" style={{ width: '100%', height: '100%' }}></div>
+                <button 
+                  type="button" 
+                  onClick={stopScanning} 
+                  style={{ position: 'absolute', bottom: '12px', left: '50%', transform: 'translateX(-50%)', padding: '6px 12px', background: 'rgba(255,107,107,0.8)', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', zIndex: 10 }}
+                >
+                  Cancel Scanner
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                {isSecureContext ? (
+                  <>
+                    <button 
+                      type="button" 
+                      onClick={startScanning} 
+                      style={{ width: '100%', padding: '14px', background: 'var(--accent)', color: '#000', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                    >
+                      Open Camera Scanner
+                    </button>
+                    <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', borderRadius: '10px', border: '1px solid var(--border)', fontSize: '13px', color: 'var(--muted)', textAlign: 'left', lineHeight: '1.6' }}>
+                      <strong style={{ color: 'var(--fg)', display: 'block', marginBottom: '4px' }}>Alternative Method:</strong>
+                      Use your phone's built-in system camera app to scan the QR code on your computer, then tap the link that appears to log in instantly.
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ padding: '20px', background: 'rgba(255,183,3,0.05)', borderRadius: '12px', border: '1px solid var(--border)', textAlign: 'left' }}>
+                    <h3 style={{ margin: '0 0 8px 0', fontSize: '15px', color: 'var(--accent)', fontWeight: 600 }}>Scan with Phone Camera</h3>
+                    <p style={{ margin: 0, fontSize: '13px', color: 'var(--muted)', lineHeight: '1.6' }}>
+                      To log in passwordless on this device:
+                    </p>
+                    <ol style={{ margin: '8px 0 0 0', paddingLeft: '20px', fontSize: '13px', color: 'var(--muted)', lineHeight: '1.6' }}>
+                      <li>Open your phone's <strong>built-in system camera app</strong>.</li>
+                      <li>Point it at the QR code displayed under the computer's profile page.</li>
+                      <li>Tap the popup link to log in instantly.</li>
+                    </ol>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500 }}>Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} style={{ width: '100%', padding: '12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--fg)', fontSize: '16px', outline: 'none' }} placeholder="Enter password" />
-          </div>
-          <button type="submit" style={{ width: '100%', padding: '14px', background: 'var(--accent)', color: '#000', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', marginTop: '8px', transition: 'background 0.2s' }}>
-            {isLogin ? 'Sign In' : 'Create Account'}
-          </button>
-        </form>
+        )}
         
-        <div style={{ textAlign: 'center', marginTop: '24px', fontSize: '14px' }}>
-          <span style={{ color: 'var(--muted)' }}>{isLogin ? "Don't have an account? " : "Already have an account? "}</span>
-          <button onClick={() => { setIsLogin(!isLogin); setError(''); }} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600, padding: 0 }}>
-            {isLogin ? 'Sign up' : 'Sign in'}
-          </button>
-        </div>
+        {/* Toggle between states */}
+        {!isScanning && (
+          <div style={{ textAlign: 'center', marginTop: '24px', fontSize: '14px' }}>
+            {mode === 'login' && (
+              <>
+                <span style={{ color: 'var(--muted)' }}>Don't have an account? </span>
+                <button onClick={() => { setMode('register'); setError(''); }} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600, padding: 0 }}>
+                  Sign up
+                </button>
+              </>
+            )}
+            {mode === 'register' && (
+              <>
+                <span style={{ color: 'var(--muted)' }}>Already have an account? </span>
+                <button onClick={() => { setMode('login'); setError(''); }} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600, padding: 0 }}>
+                  Sign in
+                </button>
+              </>
+            )}
+            {mode === 'qr' && (
+              <button onClick={() => { setMode('login'); setError(''); }} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600, padding: 0 }}>
+                Back to Sign In
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1349,13 +1728,13 @@ const LazyMessage = React.memo(({ msg, avatar, logoUrl, activeView, markdownComp
           </div>
         )}
         
-        {msg.role === 'assistant' && !msg.isStreaming && msg.tokens && msg.executionTime && (
+        {msg.role === 'assistant' && !msg.isStreaming && typeof msg.tokens === 'number' && msg.tokens > 0 && typeof msg.executionTime === 'number' && msg.executionTime > 0 ? (
           <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--muted)', fontFamily: 'monospace' }}>
             <span>{msg.tokens} tok</span>
             <span>·</span>
             <span>{msg.executionTime.toFixed(1)}s</span>
           </div>
-        )}
+        ) : null}
       </div>
     </motion.div>
   );
@@ -1408,7 +1787,42 @@ function AppContent() {
   const [themeColor, setThemeColor] = useState('#ffb703');
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [birthdate, setBirthdate] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+  const [qrTimer, setQrTimer] = useState<number>(0);
+
+  useEffect(() => {
+    if (qrTimer <= 0) return;
+    const interval = setInterval(() => {
+      setQrTimer(prev => prev - 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [qrTimer]);
+
   const [quote] = useState(() => MOTIVATIONAL_QUOTES[Math.floor(Math.random() * MOTIVATIONAL_QUOTES.length)]);
+
+  // Handle QR Login from URL parameters
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const qrToken = params.get('qrToken');
+    if (qrToken) {
+      // Clear parameter from URL so it doesn't try to log in again on page refresh
+      const newUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, newUrl);
+
+      const doTokenLogin = async () => {
+        try {
+          const user = await api.loginByToken(qrToken);
+          setCurrentUser(user);
+          localStorage.setItem('odysseus_currentUser', JSON.stringify(user));
+          window.location.reload();
+        } catch (err: any) {
+          alert(`QR Login failed: ${err.message}`);
+        }
+      };
+      doTokenLogin();
+    }
+  }, []);
 
   useEffect(() => {
     document.documentElement.style.setProperty('--accent', themeColor);
@@ -1474,7 +1888,6 @@ function AppContent() {
             setActiveSessionId(null);
             setMessages([]);
             setKanbanTasks([]);
-            setAgendas([]);
             setCharts([]);
           }
 
@@ -1499,6 +1912,9 @@ function AppContent() {
           if (dbTheme) setThemeColor(dbTheme);
           const dbBirth = await api.getData(currentUser.id, 'birthdate', '');
           if (dbBirth) setBirthdate(dbBirth);
+          
+          const c_agendas = await api.getCalendar(currentUser.id);
+          setAgendas(Array.isArray(c_agendas) ? c_agendas : []);
         } catch (e) {
           console.error("Failed to load user data", e);
         }
@@ -1522,7 +1938,6 @@ function AppContent() {
         setActiveSessionId(null);
         setMessages([]);
         setKanbanTasks([]);
-        setAgendas([]);
         setCharts([]);
         setDocumentContent('# Deep Research Document\n\nStart a research query to generate a comprehensive blog or document here.');
       }
@@ -1544,13 +1959,12 @@ function AppContent() {
           const idx = newSessions.findIndex(s => s.id === activeSessionId);
           
           const hasMsgs = messages && messages.length > 0;
-          const hasData = kanbanTasks.length > 0 || agendas.length > 0 || charts.length > 0;
+          const hasData = kanbanTasks.length > 0 || charts.length > 0;
 
           if (idx !== -1) {
             newSessions[idx].messages = messages;
             newSessions[idx].data = {
               kanban: kanbanTasks,
-              agendas: agendas,
               charts: charts
             };
             newSessions[idx].updatedAt = new Date().toISOString();
@@ -1564,7 +1978,6 @@ function AppContent() {
               messages: messages,
               data: {
                 kanban: kanbanTasks,
-                agendas: agendas,
                 charts: charts
               },
               updatedAt: new Date().toISOString()
@@ -1593,12 +2006,12 @@ function AppContent() {
         if (timeoutId) clearTimeout(timeoutId);
       };
     }
-  }, [messages, kanbanTasks, agendas, charts, currentUser, activeView, activeSessionId]);
+  }, [messages, kanbanTasks, charts, currentUser, activeView, activeSessionId]);
 
 
   const handleSidebarClick = (type: any) => {
     setActiveView(type);
-    if (type !== 'chat' && type !== 'notes') {
+    if (type === 'research' || type === 'kanban' || type === 'visualizer') {
       setIsDocPaneOpen(true);
     } else {
       setIsDocPaneOpen(false);
@@ -1628,7 +2041,6 @@ function AppContent() {
     }
     setMessages([]);
     setKanbanTasks([]);
-    setAgendas([]);
     setCharts([]);
     setDocumentContent('# Deep Research Document\n\nStart a research query to generate a comprehensive blog or document here.');
     setActiveSessionId(null);
@@ -1671,7 +2083,6 @@ function AppContent() {
       
       const d = session.data || {};
       setKanbanTasks(Array.isArray(d.kanban) ? d.kanban : []);
-      setAgendas(Array.isArray(d.agendas) ? d.agendas : []);
       setCharts(Array.isArray(d.charts) ? d.charts : []);
       
       if (currentUser) api.setData(currentUser.id, 'activeSessionId', id);
@@ -1780,7 +2191,7 @@ function AppContent() {
   const [showSettings, setShowSettings] = useState(!localStorage.getItem('groq_api_key'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 768);
   const [isLoading, setIsLoading] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatHistoryRef = useRef<HTMLDivElement>(null);
   const recentlyCreatedSessionRef = useRef<string | null>(null);
   const isFirstLoadRef = useRef(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -1882,7 +2293,12 @@ function AppContent() {
   };
 
   const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    if (chatHistoryRef.current) {
+      chatHistoryRef.current.scrollTo({
+        top: chatHistoryRef.current.scrollHeight,
+        behavior
+      });
+    }
   };
 
   useLayoutEffect(() => {
@@ -1908,7 +2324,6 @@ function AppContent() {
         type: activeView, 
         data: {
           kanban: kanbanTasks,
-          agendas: agendas,
           charts: charts
         }, 
         updatedAt: new Date().toISOString() 
@@ -1997,7 +2412,6 @@ function AppContent() {
         type: activeView, 
         data: {
           kanban: kanbanTasks,
-          agendas: agendas,
           charts: charts
         }, 
         updatedAt: new Date().toISOString() 
@@ -2200,7 +2614,7 @@ Do not use any tool to write the document, just output the block.`
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
         
-        if (chunk.usage?.total_tokens) totalTokens = chunk.usage.total_tokens;
+        if ((chunk as any).usage?.total_tokens) totalTokens = (chunk as any).usage.total_tokens;
         if ((chunk as any).x_groq?.usage?.total_tokens) totalTokens = (chunk as any).x_groq.usage.total_tokens;
 
         if (!delta) continue;
@@ -2335,15 +2749,23 @@ Do not use any tool to write the document, just output the block.`
           } else if (funcName === 'add_calendar_agenda') {
             const { date, time, title } = args;
             if (date && time && title) {
-              setAgendas(prev => {
-                if (!prev.some(a => a.dateStr === date && a.time === time && a.title === title)) {
-                  const updated = [...prev, { dateStr: date, time, title }];
-                  return updated;
+              if (currentUser) {
+                try {
+                  const added = await api.addCalendarAgenda(currentUser.id, { dateStr: date, time, title });
+                  setAgendas(prev => {
+                    if (!prev.some(a => a.dateStr === date && a.time === time && a.title === title)) {
+                      return [...prev, { id: added.id, dateStr: date, time, title }];
+                    }
+                    return prev;
+                  });
+                  setSelectedDateStr(date);
+                  result = `Agenda added successfully for ${date} at ${time}. The calendar has been updated.`;
+                } catch (e) {
+                  result = `Failed to save agenda to database.`;
                 }
-                return prev;
-              });
-              setSelectedDateStr(date);
-              result = `Agenda added successfully for ${date} at ${time}. The calendar has been updated.`;
+              } else {
+                result = `Please login to save agendas.`;
+              }
             } else {
               result = `Failed to add agenda. Missing date, time, or title.`;
             }
@@ -2408,7 +2830,7 @@ Do not use any tool to write the document, just output the block.`
         for await (const chunk of stream2) {
           const delta = chunk.choices[0]?.delta;
           
-          if (chunk.usage?.total_tokens) stream2TotalTokens = chunk.usage.total_tokens;
+          if ((chunk as any).usage?.total_tokens) stream2TotalTokens = (chunk as any).usage.total_tokens;
           if ((chunk as any).x_groq?.usage?.total_tokens) stream2TotalTokens = (chunk as any).x_groq.usage.total_tokens;
           if (delta?.content) {
             responseContent2 += delta.content;
@@ -2534,11 +2956,11 @@ Do not use any tool to write the document, just output the block.`
   };
 
   const renderMessageList = () => (
-    <div className="chat-history" onScroll={handleScroll} style={activeView === 'research' || activeView === 'calendar' || activeView === 'kanban' || activeView === 'visualizer' ? { padding: '24px 16px' } : {}}>
+    <div className="chat-history" ref={chatHistoryRef} onScroll={handleScroll} style={activeView === 'research' || activeView === 'calendar' || activeView === 'kanban' || activeView === 'visualizer' ? { padding: '24px 16px' } : {}}>
       {messages.length === 0 ? (
         <div style={{ margin: 'auto', textAlign: 'center', opacity: 0.5, marginTop: activeView === 'research' || activeView === 'calendar' || activeView === 'notes' || activeView === 'kanban' || activeView === 'visualizer' ? '10vh' : '20vh' }}>
-          {activeView === 'research' ? <Search size={56} style={{ marginBottom: 16 }} /> : activeView === 'calendar' ? <Calendar size={56} style={{ marginBottom: 16 }} /> : activeView === 'notes' ? <FileText size={56} style={{ marginBottom: 16 }} /> : activeView === 'kanban' ? <Layout size={56} style={{ marginBottom: 16 }} /> : activeView === 'visualizer' ? <PieChartIcon size={56} style={{ marginBottom: 16 }} /> : logoUrl ? <img src={logoUrl} alt="Hakuen Logo" style={{ width: 80, height: 80, marginBottom: 16 }} /> : <div style={{ fontSize: 56, fontWeight: 700, marginBottom: 16, fontFamily: 'Outfit' }}>H</div>}
-          <h2 style={activeView === 'chat' ? { fontSize: '22px', maxWidth: '800px', margin: '0 auto', lineHeight: 1.5, fontWeight: 500, whiteSpace: 'pre-wrap' } : {}}>{activeView === 'research' ? 'Deep Research Agent' : activeView === 'calendar' ? 'Calendar & Agenda' : activeView === 'notes' ? 'Notepads & To-Do' : activeView === 'kanban' ? 'Project Kanban Board' : activeView === 'visualizer' ? 'Data Visualizer' : (birthdate && new Date().getDate() === new Date(birthdate).getDate() && new Date().getMonth() === new Date(birthdate).getMonth() ? `Happy Birthday, ${currentUser.username}! 🎂🎉` : quote)}</h2>
+          {activeView === 'research' ? <Search size={56} style={{ marginBottom: 16 }} /> : activeView === 'calendar' ? <Calendar size={56} style={{ marginBottom: 16 }} /> : activeView === 'notes' ? <FileText size={56} style={{ marginBottom: 16 }} /> : activeView === 'kanban' ? <Layout size={56} style={{ marginBottom: 16 }} /> : activeView === 'visualizer' ? <PieChartIcon size={56} style={{ marginBottom: 16 }} /> : logoUrl ? <img src={logoUrl} alt="Hakuen Logo" style={{ width: 80, height: 80, marginBottom: 16, userSelect: 'none', WebkitUserDrag: 'none' } as React.CSSProperties} draggable="false" /> : <div style={{ fontSize: 56, fontWeight: 700, marginBottom: 16, fontFamily: 'Outfit', userSelect: 'none' }}>H</div>}
+          <h2 style={activeView === 'chat' ? { fontSize: '22px', maxWidth: '800px', margin: '0 auto', lineHeight: 1.5, fontWeight: 500, whiteSpace: 'pre-wrap', userSelect: 'none' } : { userSelect: 'none' }}>{activeView === 'research' ? 'Deep Research Agent' : activeView === 'calendar' ? 'Calendar & Agenda' : activeView === 'notes' ? 'Notepads & To-Do' : activeView === 'kanban' ? 'Project Kanban Board' : activeView === 'visualizer' ? 'Data Visualizer' : (birthdate && new Date().getDate() === new Date(birthdate).getDate() && new Date().getMonth() === new Date(birthdate).getMonth() ? `Happy Birthday, ${currentUser.username}! 🎂🎉` : quote)}</h2>
           {activeView === 'research' && <p style={{fontSize: 14, maxWidth: 300, margin: '12px auto 0'}}>Ask me to write a blog or compile research. I will search the web, scrape images, and write the document.</p>}
           {activeView === 'calendar' && <p style={{fontSize: 14, maxWidth: 300, margin: '12px auto 0'}}>Manage your agenda, ask for the date, or schedule tasks with Hakuen.</p>}
           {activeView === 'notes' && <p style={{fontSize: 14, maxWidth: 300, margin: '12px auto 0'}}>Ask me to create a quick note or task list. I'll save them directly to your notebook for you.</p>}
@@ -2566,7 +2988,6 @@ Do not use any tool to write the document, just output the block.`
           </div>
         </div>
       )}
-      <div ref={messagesEndRef} />
     </div>
   );
 
@@ -2575,7 +2996,7 @@ Do not use any tool to write the document, just output the block.`
       <div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '800px', alignItems: 'center', position: 'relative' }}>
         <button 
           className={`scroll-to-bottom ${showScrollButton ? 'visible' : ''}`}
-          onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
+          onClick={() => scrollToBottom('smooth')}
           title="Scroll to bottom"
         >
           <ChevronDown size={24} />
@@ -2709,8 +3130,12 @@ Do not use any tool to write the document, just output the block.`
         onClick={() => setIsSidebarOpen(false)}
       />
 
-      {/* Sidebar */}
-      <div className={`sidebar ${!isSidebarOpen ? 'collapsed' : ''}`}>
+      <div className={`sidebar ${!isSidebarOpen ? 'collapsed' : ''}`} style={{ 
+        transform: !isSidebarOpen && window.innerWidth <= 768 ? 'translateX(-100%)' : 'translateX(0)',
+        position: window.innerWidth <= 768 ? 'fixed' : 'relative',
+        height: '100%',
+        zIndex: 100
+      }}>
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
           <div className="sidebar-header" style={{ borderBottom: 'none' }}>
             <h2 
@@ -2827,7 +3252,7 @@ Do not use any tool to write the document, just output the block.`
           </div>
           
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            {isDocPaneOpen && (activeView === 'calendar' || activeView === 'research' || activeView === 'kanban' || activeView === 'visualizer') ? (
+            {(activeView === 'calendar' || activeView === 'research' || activeView === 'kanban' || activeView === 'visualizer') ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   {activeView === 'calendar' ? <Calendar size={18} color="var(--accent)" /> : activeView === 'kanban' ? <Layout size={18} color="var(--accent)" /> : activeView === 'visualizer' ? <PieChartIcon size={18} color="var(--accent)" /> : <Search size={18} color="var(--accent)" />}
@@ -2837,7 +3262,7 @@ Do not use any tool to write the document, just output the block.`
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {activeView === 'research' && (
+                  {activeView === 'research' && isDocPaneOpen && (
                     <div style={{ position: 'relative' }}>
                       <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 13, display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => setShowExportMenu(!showExportMenu)}>
                         <Download size={14}/> <span className="hide-mobile">Export</span>
@@ -2850,20 +3275,24 @@ Do not use any tool to write the document, just output the block.`
                       )}
                     </div>
                   )}
-                  {activeView === 'research' && (
+                  {activeView === 'research' && isDocPaneOpen && (
                     <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: 13, display: 'flex', alignItems: 'center', gap: '6px' }} onClick={() => setIsEditingDoc(!isEditingDoc)}>
                       {isEditingDoc ? <><Eye size={14}/> <span className="hide-mobile">Preview</span></> : <><Edit2 size={14}/> <span className="hide-mobile">Edit</span></>}
                     </button>
                   )}
-                  <button className="icon-btn" onClick={() => setIsDocPaneOpen(false)} title="Close Side Panel">
-                    <PanelRightClose size={20} />
-                  </button>
+                  {activeView !== 'calendar' && (
+                    isDocPaneOpen ? (
+                      <button className="icon-btn" onClick={() => setIsDocPaneOpen(false)} title="Close Side Panel">
+                        <PanelRightClose size={20} />
+                      </button>
+                    ) : (
+                      <button className="icon-btn" onClick={() => setIsDocPaneOpen(true)} title="Open Side Panel">
+                        <PanelRight size={24} />
+                      </button>
+                    )
+                  )}
                 </div>
               </div>
-            ) : (activeView === 'calendar' || activeView === 'research' || activeView === 'kanban' || activeView === 'visualizer') && !isDocPaneOpen ? (
-              <button className="icon-btn" onClick={() => setIsDocPaneOpen(true)} title="Open Side Panel">
-                <PanelRight size={24} />
-              </button>
             ) : (
               <div style={{ width: 40 }} />
             )}
@@ -2876,6 +3305,33 @@ Do not use any tool to write the document, just output the block.`
           <LibraryWidget libraryFiles={libraryFiles} setLibraryFiles={setLibraryFiles} currentUser={currentUser} onPreviewImage={setFullscreenImage} />
         ) : activeView === 'notes' ? (
           <NotesWidget currentUser={currentUser} onGenerateAI={handleGenerateNoteContent} />
+        ) : activeView === 'calendar' ? (
+          <CalendarWidget 
+            agendas={agendas} 
+            handleEditAgenda={async (editedAgenda) => {
+              if (!currentUser || !editedAgenda.id) return;
+              try {
+                await api.editCalendarAgenda(currentUser.id, editedAgenda.id, editedAgenda);
+                setAgendas(prev => prev.map(a => a.id === editedAgenda.id ? editedAgenda : a));
+              } catch (e) {}
+            }}
+            handleAddAgenda={async (newAgenda) => {
+              if (!currentUser) return;
+              try {
+                const added = await api.addCalendarAgenda(currentUser.id, newAgenda);
+                setAgendas(prev => [...prev, { ...newAgenda, id: added.id }]);
+              } catch (e) {}
+            }}
+            handleDeleteAgenda={async (agendaToDelete) => {
+              if (!currentUser || !agendaToDelete.id) return;
+              try {
+                await api.deleteCalendarAgenda(currentUser.id, agendaToDelete.id);
+                setAgendas(prev => prev.filter(a => a.id !== agendaToDelete.id));
+              } catch (e) {}
+            }}
+            selectedDateStr={selectedDateStr} 
+            setSelectedDateStr={setSelectedDateStr} 
+          />
         ) : (
           <div className="research-view">
             <div 
@@ -2909,18 +3365,8 @@ Do not use any tool to write the document, just output the block.`
               className={`research-document ${(!isDocPaneOpen || activeView === 'chat') ? 'collapsed' : ''}`}
               style={(isDocPaneOpen && window.innerWidth > 1024 && activeView !== 'chat') ? { width: `${docPaneWidth}%`, transition: isDragging ? 'none' : 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' } : {}}
             >
-                 <div className="doc-content" style={activeView === 'calendar' || activeView === 'kanban' || activeView === 'visualizer' ? { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } : {}}>
-                   {activeView === 'calendar' ? (
-                      <CalendarWidget 
-                        agendas={agendas} 
-                        setAgendas={(newAgendas) => {
-                          ensureSessionExists();
-                          setAgendas(newAgendas);
-                        }}
-                        selectedDateStr={selectedDateStr} 
-                        setSelectedDateStr={setSelectedDateStr} 
-                      />
-                    ) : activeView === 'kanban' ? (
+                 <div className="doc-content" style={activeView === 'kanban' || activeView === 'visualizer' ? { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } : {}}>
+                   {activeView === 'kanban' ? (
                       <KanbanWidget tasks={kanbanTasks} setTasks={(newTasks) => {
                         ensureSessionExists();
                         setKanbanTasks(newTasks);
@@ -3171,6 +3617,104 @@ Do not use any tool to write the document, just output the block.`
                   placeholder="e.g. Always respond in Indonesian, use friendly tone, keep answers short..."
                   style={{ width: '100%', height: '120px', background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--fg)', padding: '12px', borderRadius: '12px', resize: 'vertical', fontFamily: 'Inter', fontSize: '14px' }}
                 />
+              </div>
+
+              <div className="setting-group" style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border)' }}>
+                <label style={{ color: 'var(--accent)', fontSize: '14px', fontWeight: 600 }}>Password Management</label>
+                <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '12px' }}>Update your account password.</p>
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end' }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: '12px', color: 'var(--muted)', marginBottom: '4px', display: 'block' }}>New Password</label>
+                    <input 
+                      type="password" 
+                      placeholder="Enter new password" 
+                      value={newPasswordInput} 
+                      onChange={(e) => setNewPasswordInput(e.target.value)} 
+                      style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)', fontSize: '14px', outline: 'none' }} 
+                    />
+                  </div>
+                  <button 
+                    type="button"
+                    className="btn btn-primary" 
+                    onClick={async () => {
+                      if (!newPasswordInput.trim()) {
+                        alert('Please enter a new password');
+                        return;
+                      }
+                      try {
+                        await api.changePassword(currentUser.id, newPasswordInput.trim());
+                        setNewPasswordInput('');
+                        alert('Password updated successfully!');
+                      } catch (err: any) {
+                        alert(`Failed to update password: ${err.message}`);
+                      }
+                    }}
+                    style={{ height: '36px', padding: '0 16px', borderRadius: '8px' }}
+                  >
+                    Update Password
+                  </button>
+                </div>
+              </div>
+
+              <div className="setting-group" style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border)' }}>
+                <label style={{ color: 'var(--accent)', fontSize: '14px', fontWeight: 600 }}>QR Login Device Sync</label>
+                <p style={{ fontSize: '13px', color: 'var(--muted)', marginBottom: '12px' }}>Generate a QR Code to instantly log in to Hakuen on your mobile phone or other devices.</p>
+                
+                {qrCodeUrl ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border)', textAlign: 'center' }}>
+                    <div style={{ padding: '8px', background: '#fff', borderRadius: '8px', display: 'inline-block' }}>
+                      <img src={qrCodeUrl} alt="Login QR Code" style={{ width: '200px', height: '200px', display: 'block' }} />
+                    </div>
+                    <div>
+                      {qrTimer > 0 ? (
+                        <div style={{ fontSize: '13px', color: 'var(--accent)', fontWeight: 500 }}>
+                          Expires in {Math.floor(qrTimer / 60)}:{(qrTimer % 60).toString().padStart(2, '0')}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '13px', color: 'var(--danger)', fontWeight: 500 }}>
+                          QR Code expired
+                        </div>
+                      )}
+                      <p style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '8px', maxWidth: '320px', marginInline: 'auto' }}>
+                        Scan this QR code with your mobile phone's built-in camera or the QR scanner on the login page.
+                      </p>
+                    </div>
+                    <button 
+                      type="button" 
+                      className="btn btn-secondary" 
+                      onClick={async () => {
+                        try {
+                          const res = await api.generateQrToken(currentUser.id);
+                          const customUrl = `http://${res.localIp}:${window.location.port || '5173'}/?qrToken=${res.token}`;
+                          setQrCodeUrl(`https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(customUrl)}&size=200x200`);
+                          setQrTimer(300); // 5 minutes
+                        } catch (err: any) {
+                          alert(`Failed to generate QR Code: ${err.message}`);
+                        }
+                      }}
+                      style={{ fontSize: '13px', padding: '6px 12px' }}
+                    >
+                      Regenerate QR Code
+                    </button>
+                  </div>
+                ) : (
+                  <button 
+                    type="button" 
+                    className="btn btn-secondary" 
+                    onClick={async () => {
+                      try {
+                        const res = await api.generateQrToken(currentUser.id);
+                        const customUrl = `http://${res.localIp}:${window.location.port || '5173'}/?qrToken=${res.token}`;
+                        setQrCodeUrl(`https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(customUrl)}&size=200x200`);
+                        setQrTimer(300); // 5 minutes
+                      } catch (err: any) {
+                        alert(`Failed to generate QR Code: ${err.message}`);
+                      }
+                    }}
+                  >
+                    Generate Login QR Code
+                  </button>
+                )}
               </div>
 
               <div className="setting-group" style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border)' }}>

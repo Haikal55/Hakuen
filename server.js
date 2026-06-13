@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import os from 'os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -108,12 +109,24 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS calendar_events (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    dateStr TEXT NOT NULL,
+    time TEXT NOT NULL,
+    title TEXT NOT NULL,
+    color TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
 `);
 
 try { db.exec("ALTER TABLE notes ADD COLUMN color TEXT"); } catch (e) {}
 try { db.exec("ALTER TABLE notes ADD COLUMN bg_image TEXT"); } catch (e) {}
 try { db.exec("ALTER TABLE notes ADD COLUMN tags TEXT"); } catch (e) {}
 try { db.exec("ALTER TABLE notes ADD COLUMN bg_position TEXT"); } catch (e) {}
+try { db.exec("ALTER TABLE calendar_events ADD COLUMN color TEXT"); } catch (e) {}
 
 // Migration script: Move old JSON notes from chat_sessions to notes table
 try {
@@ -150,7 +163,9 @@ try {
         } catch (e) {}
       }
     })();
-    console.log(`Migrated ${migrationCount} notes to the new notes table.`);
+    if (migrationCount > 0) {
+      console.log(`Migrated ${migrationCount} notes to the new notes table.`);
+    }
   }
 } catch (error) {
   console.error("Migration error:", error);
@@ -179,6 +194,89 @@ app.post('/api/login', (req, res) => {
     res.json({ success: true, user });
   } else {
     res.status(401).json({ error: 'Invalid email or password' });
+  }
+});
+
+app.post('/api/forgot-password', (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = db.prepare('SELECT password FROM users WHERE email = ?').get(email);
+    if (user) {
+      res.json({ success: true, password: user.password });
+    } else {
+      res.status(404).json({ error: 'User with this email not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/users/:id/password', (req, res) => {
+  const { id } = req.params;
+  const { password } = req.body;
+  try {
+    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(password, id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// QR Login In-Memory Tokens and Handlers
+const qrTokens = new Map();
+
+function getLocalIp() {
+  const interfaces = os.networkInterfaces();
+  for (const interfaceName of Object.keys(interfaces)) {
+    const ifaceList = interfaces[interfaceName];
+    if (!ifaceList) continue;
+    for (const iface of ifaceList) {
+      if ((iface.family === 'IPv4' || iface.family === 4) && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
+app.post('/api/users/generate-qr-token', (req, res) => {
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+  try {
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes expiry
+    qrTokens.set(token, { userId, expiresAt });
+    const localIp = getLocalIp();
+    res.json({ token, localIp });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/login-by-token', (req, res) => {
+  const { token } = req.body;
+  if (!token) {
+    return res.status(400).json({ error: 'Token is required' });
+  }
+  try {
+    const tokenData = qrTokens.get(token);
+    if (!tokenData) {
+      return res.status(400).json({ error: 'Invalid or expired QR code' });
+    }
+    if (tokenData.expiresAt < Date.now()) {
+      qrTokens.delete(token);
+      return res.status(400).json({ error: 'QR code has expired' });
+    }
+    qrTokens.delete(token);
+    const user = db.prepare('SELECT id, username, email FROM users WHERE id = ?').get(tokenData.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({ success: true, user });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -337,6 +435,54 @@ app.get('/api/notes/image/file/:filename', (req, res) => {
     }
   } catch (error) {
     res.status(500).send('Error reading image');
+  }
+});
+
+// Calendar Routes
+app.get('/api/calendar/:userId', (req, res) => {
+  const { userId } = req.params;
+  try {
+    const events = db.prepare('SELECT * FROM calendar_events WHERE user_id = ? ORDER BY dateStr ASC, time ASC').all(userId);
+    res.json(events);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/calendar/:userId', (req, res) => {
+  const { userId } = req.params;
+  const { dateStr, time, title, color } = req.body;
+  try {
+    const eventId = crypto.randomUUID();
+    db.prepare('INSERT INTO calendar_events (id, user_id, dateStr, time, title, color) VALUES (?, ?, ?, ?, ?, ?)').run(
+      eventId, userId, dateStr, time, title, color || null
+    );
+    res.json({ success: true, id: eventId });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/calendar/:userId/:id', (req, res) => {
+  const { userId, id } = req.params;
+  const { dateStr, time, title, color } = req.body;
+  try {
+    db.prepare('UPDATE calendar_events SET dateStr = ?, time = ?, title = ?, color = ? WHERE id = ? AND user_id = ?').run(
+      dateStr, time, title, color || null, id, userId
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/calendar/:userId/:id', (req, res) => {
+  const { userId, id } = req.params;
+  try {
+    db.prepare('DELETE FROM calendar_events WHERE id = ? AND user_id = ?').run(id, userId);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
