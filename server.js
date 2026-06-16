@@ -126,7 +126,12 @@ try { db.exec("ALTER TABLE notes ADD COLUMN color TEXT"); } catch (e) {}
 try { db.exec("ALTER TABLE notes ADD COLUMN bg_image TEXT"); } catch (e) {}
 try { db.exec("ALTER TABLE notes ADD COLUMN tags TEXT"); } catch (e) {}
 try { db.exec("ALTER TABLE notes ADD COLUMN bg_position TEXT"); } catch (e) {}
+try { db.exec("ALTER TABLE notes ADD COLUMN order_index INTEGER DEFAULT 0"); } catch (e) {}
 try { db.exec("ALTER TABLE calendar_events ADD COLUMN color TEXT"); } catch (e) {}
+try { db.exec("ALTER TABLE calendar_events ADD COLUMN description TEXT"); } catch (e) {}
+try { db.exec("ALTER TABLE calendar_events ADD COLUMN recurrence TEXT DEFAULT 'none'"); } catch (e) {}
+try { db.exec("ALTER TABLE calendar_events ADD COLUMN category TEXT DEFAULT 'other'"); } catch (e) {}
+try { db.exec("ALTER TABLE calendar_events ADD COLUMN end_time TEXT"); } catch (e) {}
 
 // Migration script: Move old JSON notes from chat_sessions to notes table
 try {
@@ -341,6 +346,22 @@ app.post('/api/notes/:userId', (req, res) => {
   }
 });
 
+app.put('/api/notes/:userId/reorder', (req, res) => {
+  const { userId } = req.params;
+  const { orderedIds } = req.body; // Array of note IDs in order
+  try {
+    db.transaction(() => {
+      const stmt = db.prepare('UPDATE notes SET order_index = ? WHERE id = ? AND user_id = ?');
+      orderedIds.forEach((id, index) => {
+        stmt.run(index, id, userId);
+      });
+    })();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.put('/api/notes/:userId/:id', (req, res) => {
   const { userId, id } = req.params;
   const { title, type, content, tasks, is_pinned, is_archived, order_index, color, bg_image, tags, bg_position } = req.body;
@@ -377,21 +398,7 @@ app.put('/api/notes/:userId/:id', (req, res) => {
   }
 });
 
-app.put('/api/notes/:userId/reorder', (req, res) => {
-  const { userId } = req.params;
-  const { orderedIds } = req.body; // Array of note IDs in order
-  try {
-    db.transaction(() => {
-      const stmt = db.prepare('UPDATE notes SET order_index = ? WHERE id = ? AND user_id = ?');
-      orderedIds.forEach((id, index) => {
-        stmt.run(index, id, userId);
-      });
-    })();
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+
 
 app.delete('/api/notes/:userId/:id', (req, res) => {
   const { userId, id } = req.params;
@@ -451,11 +458,11 @@ app.get('/api/calendar/:userId', (req, res) => {
 
 app.post('/api/calendar/:userId', (req, res) => {
   const { userId } = req.params;
-  const { dateStr, time, title, color } = req.body;
+  const { dateStr, time, endTime, title, color, description, recurrence, category } = req.body;
   try {
     const eventId = crypto.randomUUID();
-    db.prepare('INSERT INTO calendar_events (id, user_id, dateStr, time, title, color) VALUES (?, ?, ?, ?, ?, ?)').run(
-      eventId, userId, dateStr, time, title, color || null
+    db.prepare('INSERT INTO calendar_events (id, user_id, dateStr, time, end_time, title, color, description, recurrence, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      eventId, userId, dateStr, time, endTime || null, title, color || null, description || null, recurrence || 'none', category || 'other'
     );
     res.json({ success: true, id: eventId });
   } catch (error) {
@@ -465,10 +472,10 @@ app.post('/api/calendar/:userId', (req, res) => {
 
 app.put('/api/calendar/:userId/:id', (req, res) => {
   const { userId, id } = req.params;
-  const { dateStr, time, title, color } = req.body;
+  const { dateStr, time, endTime, title, color, description, recurrence, category } = req.body;
   try {
-    db.prepare('UPDATE calendar_events SET dateStr = ?, time = ?, title = ?, color = ? WHERE id = ? AND user_id = ?').run(
-      dateStr, time, title, color || null, id, userId
+    db.prepare('UPDATE calendar_events SET dateStr = ?, time = ?, end_time = ?, title = ?, color = ?, description = ?, recurrence = ?, category = ? WHERE id = ? AND user_id = ?').run(
+      dateStr, time, endTime || null, title, color || null, description || null, recurrence || 'none', category || 'other', id, userId
     );
     res.json({ success: true });
   } catch (error) {

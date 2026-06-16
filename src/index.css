@@ -37,6 +37,9 @@ body {
 /* Typography */
 h1, h2, h3, h4 { font-family: 'Outfit', sans-serif; margin: 0; color: var(--heading); }
 
+/* Forms */
+select option { background: var(--panel); color: var(--fg); }
+
 /* Layout */
 .app-container {
   display: flex;
@@ -422,11 +425,13 @@ h1, h2, h3, h4 { font-family: 'Outfit', sans-serif; margin: 0; color: var(--head
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 20px;
-  padding: 32px;
+  padding: 24px;
   width: 100%;
   max-width: 440px;
   box-shadow: 0 24px 64px rgba(0,0,0,0.6);
   animation: modalPop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  max-height: 90vh;
+  overflow-y: auto;
 }
 
 @keyframes modalPop {
@@ -823,6 +828,7 @@ h1, h2, h3, h4 { font-family: 'Outfit', sans-serif; margin: 0; color: var(--head
   overflow: hidden;
   background: var(--bg);
   padding: 20px 24px;
+  position: relative;
 }
 
 .calendar-content-area {

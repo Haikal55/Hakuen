@@ -148,7 +148,7 @@ export const api = {
     return await res.json();
   },
 
-  async addCalendarAgenda(userId: any, agendaData: { dateStr: string, time: string, title: string, color?: string }) {
+  async addCalendarAgenda(userId: any, agendaData: { dateStr: string, time: string, endTime?: string, title: string, color?: string, description?: string, recurrence?: string, category?: string }) {
     const res = await fetch(`${API_URL}/calendar/${userId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -157,7 +157,7 @@ export const api = {
     return await res.json();
   },
 
-  async editCalendarAgenda(userId: any, agendaId: any, agendaData: { dateStr: string, time: string, title: string, color?: string }) {
+  async editCalendarAgenda(userId: any, agendaId: any, agendaData: { dateStr: string, time: string, endTime?: string, title: string, color?: string, description?: string, recurrence?: string, category?: string }) {
     const res = await fetch(`${API_URL}/calendar/${userId}/${agendaId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -199,11 +199,12 @@ export const api = {
   },
 
   async reorderNotes(userId: any, orderedIds: string[]) {
-    await fetch(`${API_URL}/notes/${userId}/reorder`, {
+    const res = await fetch(`${API_URL}/notes/${userId}/reorder`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ orderedIds })
     });
+    if (!res.ok) throw new Error('Failed to reorder notes');
   },
 
   async uploadNoteImage(userId: any, base64: string, filename: string) {

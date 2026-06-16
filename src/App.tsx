@@ -22,14 +22,14 @@ export interface KanbanBoard {
   color?: string;
   tasks: KanbanTask[];
 }
-export interface Agenda { id?: string; dateStr: string; time: string; title: string; color?: string; }
+export interface Agenda { id?: string; dateStr: string; time: string; end_time?: string; title: string; color?: string; description?: string; recurrence?: 'none' | 'daily' | 'weekly' | 'monthly'; category?: 'work' | 'personal' | 'study' | 'fun' | 'other'; }
 export interface NoteTask { text: string; done: boolean; }
 export interface Note { id: string; title: string; type: 'text' | 'todo'; content: string; tasks?: any[]; is_pinned?: boolean; is_archived?: boolean; order_index?: number; created_at?: string; color?: string; bg_image?: string; bg_position?: string; tags?: string; }
 export interface ChartData { name: string; value: number; color?: string; }
 export interface Chart { id: string; type: 'bar' | 'line' | 'pie'; title: string; data: ChartData[]; }
 export interface Session { id: string; title: string; type: string; messages: Message[]; data: any; updatedAt: string; }
 import Groq from 'groq-sdk';
-import { Clock, ChevronDown, Send, Settings, User, Loader2, MessageSquare, Search, PanelLeftClose, PanelLeft, PanelRightClose, PanelRight, Edit2, Eye, FileText, CheckCircle, Calendar, ChevronLeft, ChevronRight, Paperclip, Trash2, Plus, Layout, PieChart as PieChartIcon, Upload, Download, Folder, Archive, CheckSquare, Check, X, Move, Image as ImageIcon, Sparkles, Briefcase, Compass, GraduationCap, Home, Target, Rocket, Code, Award, Heart, Zap, List, BookOpen, Activity } from 'lucide-react';
+import { Clock, ChevronDown, Send, Settings, User, Loader2, MessageSquare, Search, PanelLeftClose, PanelLeft, PanelRightClose, PanelRight, Edit2, Eye, FileText, CheckCircle, Calendar, ChevronLeft, ChevronRight, Paperclip, Trash2, Plus, Layout, PieChart as PieChartIcon, Upload, Download, Folder, Archive, CheckSquare, Check, X, Move, Image as ImageIcon, Sparkles, Briefcase, Target, Languages } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -38,6 +38,7 @@ import html2pdf from 'html2pdf.js';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, LineChart, Line, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
 import './index.css';
 import { api } from './api';
+import TranslatorWidget from './TranslatorWidget';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Tesseract from 'tesseract.js';
@@ -48,6 +49,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
+export const THEME_COLORS = ['#ffb703', '#3b82f6', '#10b981', '#ef4444', '#8b5cf6', '#ec4899'];
 
 const preprocessLaTeX = (content: any) => {
   if (typeof content !== 'string') return '';
@@ -153,8 +155,13 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
   const [isAddingAgenda, setIsAddingAgenda] = useState(false);
   const [newAgendaTitle, setNewAgendaTitle] = useState('');
   const [newAgendaTime, setNewAgendaTime] = useState('09:00');
+  const [newAgendaEndTime, setNewAgendaEndTime] = useState('');
   const [newAgendaColor, setNewAgendaColor] = useState('#3b82f6');
   const [editingAgendaId, setEditingAgendaId] = useState<string | null>(null);
+  const [newAgendaDescription, setNewAgendaDescription] = useState('');
+  const [newAgendaRecurrence, setNewAgendaRecurrence] = useState<'none'|'daily'|'weekly'|'monthly'>('none');
+  const [newAgendaCategory, setNewAgendaCategory] = useState<'work'|'personal'|'study'|'fun'|'other'>('other');
+  const [reminderNotified, setReminderNotified] = useState<Set<string>>(new Set());
 
   const [showClockSettingsModal, setShowClockSettingsModal] = useState(false);
   const [showSeconds, setShowSeconds] = useState(() => localStorage.getItem('clock_show_seconds') !== 'false');
@@ -188,14 +195,24 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
     setEditingAgendaId(null);
     setNewAgendaTitle('');
     setNewAgendaTime('09:00');
-    setNewAgendaColor('#3b82f6');
+    setNewAgendaEndTime('');
+    setNewAgendaColor(THEME_COLORS[1]);
+    setNewAgendaDescription('');
+    setNewAgendaRecurrence('none');
+    setNewAgendaCategory('other');
   };
 
   const handleEditClick = (a: Agenda) => {
-    setEditingAgendaId(a.id || null);
+    // Strip virtual suffix from recurring event IDs (format: realId_YYYY-MM-DD)
+    const realId = a.id ? a.id.replace(/_\d{4}-\d{2}-\d{2}$/, '') : null;
+    setEditingAgendaId(realId);
     setNewAgendaTitle(a.title);
     setNewAgendaTime(a.time);
-    setNewAgendaColor(a.color || '#3b82f6');
+    setNewAgendaEndTime(a.end_time || '');
+    setNewAgendaColor(a.color || THEME_COLORS[1]);
+    setNewAgendaDescription(a.description || '');
+    setNewAgendaRecurrence(a.recurrence || 'none');
+    setNewAgendaCategory(a.category || 'other');
     setIsAddingAgenda(true);
   };
 
@@ -204,12 +221,50 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
     return () => clearInterval(timer);
   }, []);
 
+  // Auto-disappear logic for non-repeating events (15 mins after end time)
+  useEffect(() => {
+    if (time.getSeconds() !== 0) return; // Check once per minute
+    agendas.forEach(a => {
+      if (a.recurrence && a.recurrence !== 'none') return;
+      const eventDate = new Date(a.dateStr + 'T00:00:00');
+      const [endH, endM] = (a.end_time || a.time).split(':').map(Number);
+      eventDate.setHours(endH, endM + 15, 0, 0);
+      if (time > eventDate) {
+        handleDeleteAgenda(a);
+      }
+    });
+  }, [time, agendas, handleDeleteAgenda]);
+
+
   const currentMonth = time.getMonth();
   const currentYear = time.getFullYear();
   const todayDate = time.getDate();
   const todayStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(todayDate).padStart(2, '0')}`;
 
-  const activeAgendas = agendas.filter(a => {
+  // Expand recurring events up to 90 days ahead
+  const expandedAgendas = useMemo(() => {
+    const result: Agenda[] = [];
+    const maxDate = new Date();
+    maxDate.setDate(maxDate.getDate() + 90);
+    for (const a of agendas) {
+      result.push(a);
+      if (a.recurrence && a.recurrence !== 'none') {
+        const current = new Date(a.dateStr + 'T00:00:00');
+        while (true) {
+          if (a.recurrence === 'daily') current.setDate(current.getDate() + 1);
+          else if (a.recurrence === 'weekly') current.setDate(current.getDate() + 7);
+          else if (a.recurrence === 'monthly') current.setMonth(current.getMonth() + 1);
+          else break;
+          if (current > maxDate) break;
+          const dateStr = current.toISOString().split('T')[0];
+          result.push({ ...a, id: `${a.id}_${dateStr}`, dateStr });
+        }
+      }
+    }
+    return result;
+  }, [agendas]);
+
+  const activeAgendas = expandedAgendas.filter(a => {
     const agendaDate = new Date(`${a.dateStr}T${a.time}:00`);
     const oneHourAgo = new Date(time.getTime() - 60 * 60 * 1000);
     return agendaDate > oneHourAgo;
@@ -217,6 +272,7 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
 
   const timelineRef = useRef<HTMLDivElement>(null);
   const dayAgendas = activeAgendas.filter(a => a.dateStr === selectedDateStr);
+  const allDayAgendas = expandedAgendas.filter(a => a.dateStr === selectedDateStr);
   const firstEventTime = dayAgendas.length > 0 
     ? [...dayAgendas].sort((a,b) => a.time.localeCompare(b.time))[0].time 
     : null;
@@ -258,7 +314,57 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
     days.push({ date: i, isCurrentMonth: false, isToday: false, dateStr: dStr, dayAgendas: activeAgendas.filter(a => a.dateStr === dStr) });
   }
 
-  const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6'];
+  // Browser reminder notifications
+  useEffect(() => {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') Notification.requestPermission();
+    const checkReminders = () => {
+      if (Notification.permission !== 'granted') return;
+      const now = new Date();
+      for (const a of expandedAgendas) {
+        const eventTime = new Date(`${a.dateStr}T${a.time}:00`);
+        const diffMin = Math.round((eventTime.getTime() - now.getTime()) / 60000);
+        for (const rm of [5, 15, 30]) {
+          if (diffMin === rm) {
+            const key = `${a.id}_${rm}`;
+            if (!reminderNotified.has(key)) {
+              new Notification(`🔔 Upcoming: ${a.title}`, {
+                body: `Starts in ${rm} minutes (${a.time})${a.description ? '\n' + a.description : ''}`,
+                icon: '/favicon.ico'
+              });
+              setReminderNotified(prev => new Set([...prev, key]));
+            }
+          }
+        }
+      }
+    };
+    const interval = setInterval(checkReminders, 60000);
+    return () => clearInterval(interval);
+  }, [expandedAgendas, reminderNotified]);
+
+  // Countdown helper
+  const getCountdown = (a: Agenda) => {
+    const now = new Date();
+    const eventTime = new Date(`${a.dateStr}T${a.time}:00`);
+    const diffMs = eventTime.getTime() - now.getTime();
+    if (diffMs < 0) return null;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 60) return `in ${diffMin}m`;
+    const diffHour = Math.floor(diffMs / 3600000);
+    if (diffHour < 24) return `in ${diffHour}h`;
+    return `in ${Math.floor(diffMs / 86400000)}d`;
+  };
+
+  const CATEGORY_CONFIG: Record<string, { label: string; color: string; emoji: string }> = {
+    work:     { label: 'Work',     color: '#3b82f6', emoji: '💼' },
+    personal: { label: 'Personal', color: '#10b981', emoji: '👤' },
+    study:    { label: 'Study',    color: '#8b5cf6', emoji: '📚' },
+    fun:      { label: 'Fun',      color: '#f472b6', emoji: '🎉' },
+    other:    { label: 'Other',    color: '#9ca3af', emoji: '📌' },
+  };
+
+  const colors = THEME_COLORS;
+
 
   const upcoming = activeAgendas
     .slice()
@@ -437,11 +543,18 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {upcoming.map((a, idx) => {
                 const agendaColor = a.color || '#ffb703';
+                const cat = CATEGORY_CONFIG[a.category || 'other'];
+                const countdown = getCountdown(a);
                 return (
-                  <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: `${agendaColor}15`, borderRadius: 8, borderLeft: `3px solid ${agendaColor}`, border: `1px solid ${agendaColor}33`, borderLeftWidth: 3 }}>
+                  <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 12px', background: `${agendaColor}15`, borderRadius: 8, border: `1px solid ${agendaColor}33`, borderLeft: `3px solid ${agendaColor}` }}>
+                    <span style={{ fontSize: 14, lineHeight: '16px', marginTop: 1, flexShrink: 0 }}>{cat.emoji}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</div>
+                        {countdown && <span style={{ fontSize: 10, fontWeight: 700, color: agendaColor, whiteSpace: 'nowrap', flexShrink: 0 }}>{countdown}</span>}
+                      </div>
                       <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2 }}>{a.dateStr} • {a.time}</div>
+                      {a.description && <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.7 }}>{a.description}</div>}
                     </div>
                   </div>
                 );
@@ -568,217 +681,337 @@ function CalendarWidget({ agendas, handleAddAgenda, handleEditAgenda, handleDele
         </div>
       )}
 
-      {/* Modal Overlay for managing agendas on selected date */}
+      {/* Full-screen Agenda Day View — contained within calendar area, no sidebar overlap */}
       {selectedDateStr && (
-        <div 
-          className="settings-overlay" 
-          style={{ zIndex: 150 }}
-          onClick={() => { setSelectedDateStr(''); resetForm(); }}
-        >
-          <div 
-            className="settings-modal" 
-            style={{ maxWidth: '600px', width: '90%', display: 'flex', flexDirection: 'column', gap: 20 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ margin: 0, color: 'var(--heading)', fontSize: 20 }}>Agendas: {selectedDateStr}</h3>
-              <button onClick={() => { setSelectedDateStr(''); resetForm(); }} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 8, borderRadius: '50%' }} onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} onMouseLeave={e => e.currentTarget.style.background='none'}>
-                <X size={20} />
-              </button>
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'var(--bg)',
+          display: 'flex', flexDirection: 'column',
+          zIndex: 150,
+          animation: 'modalPop 0.25s cubic-bezier(0.34, 1.2, 0.64, 1)'
+        }}>
+          {/* ── Header ── */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '18px 28px', borderBottom: '1px solid var(--border)',
+            background: 'var(--panel)', flexShrink: 0
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <button
+                onClick={() => { setSelectedDateStr(''); resetForm(); }}
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'var(--fg)', cursor: 'pointer', padding: '6px', borderRadius: 8, display: 'flex', alignItems: 'center', transition: 'all 0.2s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = 'var(--accent)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.color = 'var(--fg)'; }}
+              ><X size={18} /></button>
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 2 }}>
+                  {new Date(selectedDateStr + 'T00:00:00').toLocaleDateString('id-ID', { weekday: 'long' })}
+                </div>
+                <h2 style={{ margin: 0, fontSize: 22, color: 'var(--heading)', fontWeight: 700 }}>
+                  {new Date(selectedDateStr + 'T00:00:00').toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
+                </h2>
+              </div>
             </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, color: 'var(--muted)', marginRight: 8 }}>
+                {allDayAgendas.length} event{allDayAgendas.length !== 1 ? 's' : ''}
+              </span>
+              <button
+                onClick={() => {
+                  const d = new Date(selectedDateStr + 'T00:00:00');
+                  d.setDate(d.getDate() - 1);
+                  setSelectedDateStr(d.toISOString().split('T')[0]);
+                  resetForm();
+                }}
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'var(--fg)', cursor: 'pointer', padding: '6px 10px', borderRadius: 8, display: 'flex', alignItems: 'center', transition: 'all 0.2s' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+              ><ChevronLeft size={16} /></button>
+              <button
+                onClick={() => {
+                  const d = new Date(selectedDateStr + 'T00:00:00');
+                  d.setDate(d.getDate() + 1);
+                  setSelectedDateStr(d.toISOString().split('T')[0]);
+                  resetForm();
+                }}
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', color: 'var(--fg)', cursor: 'pointer', padding: '6px 10px', borderRadius: 8, display: 'flex', alignItems: 'center', transition: 'all 0.2s' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+              ><ChevronRight size={16} /></button>
+            </div>
+          </div>
 
-            {/* Daily Hourly Timeline Grid */}
-            <div 
+          {/* ── Body: Timeline (left) + Form Panel (right) ── */}
+          <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+
+            {/* LEFT: 24-hour Timeline */}
+            <div
               ref={timelineRef}
-              style={{ 
-                height: '350px', 
-                overflowY: 'auto', 
-                position: 'relative', 
-                background: 'rgba(0,0,0,0.15)',
-                borderRadius: '10px',
-                border: '1px solid var(--border)',
-                display: 'flex',
-                flexDirection: 'column'
-              }}
               className="hide-scrollbar"
+              style={{ flex: 1, overflowY: 'auto', position: 'relative', background: 'rgba(0,0,0,0.08)' }}
             >
               {[...Array(24)].map((_, hour) => {
                 const hourStr = String(hour).padStart(2, '0') + ':00';
-                const hourAgendas = dayAgendas.filter(a => {
-                  const agendaHour = parseInt(a.time.split(':')[0]);
-                  return agendaHour === hour;
-                });
-                
+
+                const isCurrentHour = selectedDateStr === todayStr && time.getHours() === hour;
                 return (
-                  <div 
-                    key={hour} 
+                  <div
+                    key={hour}
                     data-hour={hour}
-                    style={{ 
-                      display: 'flex', 
-                      minHeight: '50px', 
-                      position: 'relative',
-                      borderBottom: '1px solid rgba(255,255,255,0.02)'
+                    style={{
+                      display: 'flex', minHeight: '64px', position: 'relative',
+                      borderBottom: '1px solid rgba(255,255,255,0.03)',
+                      background: isCurrentHour ? 'rgba(var(--accent-rgb),0.04)' : 'transparent'
                     }}
                   >
-                    {/* Time Label */}
-                    <div style={{ 
-                      width: '55px', 
-                      paddingRight: '8px', 
-                      textAlign: 'right', 
-                      fontSize: '11px', 
-                      color: 'var(--muted)', 
-                      fontWeight: 500,
-                      paddingTop: '6px',
-                      userSelect: 'none',
-                      borderRight: '1px solid var(--border)',
-                      background: 'rgba(0,0,0,0.1)'
-                    }}>
-                      {hourStr}
-                    </div>
-                    
-                    {/* Slot Container (Interactive) */}
-                    <div 
-                      onClick={() => {
-                        setNewAgendaTime(String(hour).padStart(2, '0') + ':00');
-                        setIsAddingAgenda(true);
-                        setEditingAgendaId(null);
-                        setNewAgendaTitle('');
-                      }}
-                      style={{ 
-                        flex: 1, 
-                        position: 'relative', 
-                        padding: '4px 8px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '4px',
-                        cursor: 'pointer',
-                        transition: 'background 0.1s'
-                      }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                    {/* Time label */}
+                    <div style={{
+                      width: '70px', flexShrink: 0,
+                      paddingRight: '12px', paddingTop: '10px',
+                      textAlign: 'right', fontSize: '12px',
+                      color: isCurrentHour ? 'var(--accent)' : 'var(--muted)',
+                      fontWeight: isCurrentHour ? 700 : 400,
+                      borderRight: `1px solid ${isCurrentHour ? 'var(--accent)' : 'var(--border)'}`,
+                      background: 'rgba(0,0,0,0.06)', userSelect: 'none'
+                    }}>{hourStr}</div>
+
+                    {/* Empty Slot area for clicking to add */}
+                    <div
+                      onClick={() => { resetForm(); setNewAgendaTime(String(hour).padStart(2, '0') + ':00'); setIsAddingAgenda(true); }}
+                      style={{ flex: 1, cursor: 'pointer', transition: 'background 0.1s' }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.025)'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                    >
-                      {hourAgendas.map((a, aIdx) => (
-                        <div 
-                          key={aIdx} 
-                          onClick={(e) => {
-                            e.stopPropagation(); // Avoid triggering slot click
-                          }}
-                          style={{ 
-                            background: `linear-gradient(to right, ${a.color || '#3b82f6'}33, rgba(255,255,255,0.02))`,
-                            borderLeft: `3px solid ${a.color || '#3b82f6'}`,
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                            fontSize: '13px',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            color: 'var(--fg)',
-                            boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-                            border: '1px solid rgba(255,255,255,0.04)',
-                            borderLeftWidth: '3px'
-                          }}
-                        >
-                          <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</span>
-                            <span style={{ fontSize: '10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>({a.time})</span>
-                          </div>
-                          
-                          <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-                            <button 
-                              type="button"
-                              onClick={() => handleEditClick(a)} 
-                              style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '3px', borderRadius: '50%', display: 'flex', alignItems: 'center' }} 
-                              onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} 
-                              onMouseLeave={e => e.currentTarget.style.background='none'}
-                            >
-                              <Edit2 size={12} />
-                            </button>
-                            <button 
-                              type="button"
-                              onClick={() => handleDeleteAgenda(a)} 
-                              style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '3px', borderRadius: '50%', display: 'flex', alignItems: 'center' }} 
-                              onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'} 
-                              onMouseLeave={e => e.currentTarget.style.background='none'}
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                    />
+                  </div>
+                );
+              })}
+
+              {/* Absolute Events Overlay */}
+              {allDayAgendas.map((a, aIdx) => {
+                const cat = CATEGORY_CONFIG[a.category || 'other'];
+                const [startH, startM] = a.time.split(':').map(Number);
+                const startHourFloat = startH + (startM || 0) / 60;
+                let endHourFloat = startHourFloat + 0.5; // default 30 mins
+                if (a.end_time) {
+                  const [endH, endM] = a.end_time.split(':').map(Number);
+                  endHourFloat = endH + (endM || 0) / 60;
+                  if (endHourFloat < startHourFloat) endHourFloat = startHourFloat + 0.5;
+                }
+                const topPx = startHourFloat * 64;
+                const heightPx = Math.max((endHourFloat - startHourFloat) * 64, 24);
+
+                return (
+                  <div
+                    key={a.id || aIdx}
+                    onClick={e => { e.stopPropagation(); handleEditClick(a); }}
+                    style={{
+                      position: 'absolute',
+                      top: `${topPx}px`,
+                      left: '78px', right: '12px',
+                      height: `${heightPx}px`,
+                      zIndex: 5,
+                      background: `linear-gradient(to right, ${a.color || '#3b82f6'}30, rgba(255,255,255,0.02))`,
+                      borderLeft: `4px solid ${a.color || '#3b82f6'}`,
+                      borderRadius: '6px', padding: '4px 8px',
+                      display: 'flex', flexDirection: 'column',
+                      color: 'var(--fg)', border: `1px solid ${a.color || '#3b82f6'}30`,
+                      borderLeftWidth: '4px', boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+                      overflow: 'hidden', cursor: 'pointer', backdropFilter: 'blur(4px)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 13 }}>{cat.emoji}</span>
+                        <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--heading)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.title}</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); handleDeleteAgenda(a); }}
+                          style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '2px', opacity: 0.6 }}
+                          onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = '#ef4444'; }}
+                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = 'var(--muted)'; }}
+                        ><Trash2 size={12} /></button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 500, marginTop: 2 }}>
+                      {a.time} {a.end_time ? `- ${a.end_time}` : ''}
+                      {a.recurrence && a.recurrence !== 'none' && ` · 🔁`}
                     </div>
                   </div>
                 );
               })}
 
-              {/* Today's time indicator line */}
+              {/* Current time indicator */}
               {selectedDateStr === todayStr && (
-                <div 
-                  style={{ 
-                    position: 'absolute', 
-                    left: '55px', 
-                    right: 0, 
-                    top: `${(time.getHours() * 50) + (time.getMinutes() / 60) * 50}px`, 
-                    height: '2px', 
-                    background: 'var(--accent)', 
-                    zIndex: 10,
-                    pointerEvents: 'none'
-                  }}
-                >
-                  <div style={{ 
-                    position: 'absolute', 
-                    left: '-4px', 
-                    top: '-3px', 
-                    width: '8px', 
-                    height: '8px', 
-                    borderRadius: '50%', 
-                    background: 'var(--accent)' 
-                  }} />
+                <div style={{
+                  position: 'absolute', left: '70px', right: 0,
+                  top: `${(time.getHours() * 64) + (time.getMinutes() / 60) * 64}px`,
+                  height: '2px', background: 'var(--accent)', zIndex: 10, pointerEvents: 'none'
+                }}>
+                  <div style={{ position: 'absolute', left: '-5px', top: '-4px', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--accent)', boxShadow: '0 0 8px var(--accent)' }} />
                 </div>
               )}
             </div>
 
-            {!isAddingAgenda ? (
-              <button onClick={() => { resetForm(); setIsAddingAgenda(true); }} style={{ background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 10, padding: 12, fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 15 }}>
-                <Plus size={18} /> Add New Agenda
-              </button>
-            ) : (
-              <div style={{ background: 'rgba(255,255,255,0.02)', padding: 16, borderRadius: 10, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <h4 style={{ margin: 0, color: 'var(--heading)', fontSize: 16 }}>{editingAgendaId ? 'Edit Agenda' : 'New Agenda'}</h4>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <input type="time" value={newAgendaTime} onChange={e => setNewAgendaTime(e.target.value)} style={{ flex: 1, padding: 8, borderRadius: 6, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.2)', color: 'var(--fg)', fontSize: 14 }} />
-                  <input type="text" placeholder="Agenda Title" value={newAgendaTitle} onChange={e => setNewAgendaTitle(e.target.value)} style={{ flex: 2, padding: 8, borderRadius: 6, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.2)', color: 'var(--fg)', fontSize: 14 }} />
+            {/* RIGHT: Form Panel */}
+            <div style={{
+              width: '380px', flexShrink: 0, borderLeft: '1px solid var(--border)',
+              display: 'flex', flexDirection: 'column', overflowY: 'auto', background: 'var(--panel)'
+            }} className="hide-scrollbar">
+              {!isAddingAgenda ? (
+                <div style={{ padding: '28px 24px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+                  {/* Empty / event list state */}
+                  {allDayAgendas.length === 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingTop: 40, color: 'var(--muted)' }}>
+                      <Calendar size={48} opacity={0.15} />
+                      <p style={{ margin: 0, fontSize: 14, textAlign: 'center' }}>No events for this day.<br/>Click on a time slot or the button below to add one.</p>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Today's Events</div>
+                      {allDayAgendas.sort((a,b) => a.time.localeCompare(b.time)).map((a, idx) => {
+                        const cat = CATEGORY_CONFIG[a.category || 'other'];
+                        return (
+                          <div key={idx} style={{ padding: '12px 14px', borderRadius: 10, background: `${a.color || '#3b82f6'}12`, border: `1px solid ${a.color || '#3b82f6'}25`, borderLeft: `3px solid ${a.color || '#3b82f6'}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                                  <span>{cat.emoji}</span>
+                                  <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--heading)' }}>{a.title}</span>
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--muted)' }}>{a.time}{a.end_time ? ` - ${a.end_time}` : ''} · {cat.label}{a.recurrence && a.recurrence !== 'none' ? ` · 🔁 ${a.recurrence}` : ''}</div>
+                                {a.description && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, opacity: 0.8 }}>{a.description}</div>}
+                              </div>
+                              <div style={{ display: 'flex', gap: 4 }}>
+                                <button onClick={() => handleEditClick(a)}
+                                  style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '4px', borderRadius: 6, transition: 'all 0.15s' }}
+                                  onMouseEnter={e => e.currentTarget.style.color = 'var(--accent)'}
+                                  onMouseLeave={e => e.currentTarget.style.color = 'var(--muted)'}
+                                ><Edit2 size={13} /></button>
+                                <button onClick={() => handleDeleteAgenda(a)}
+                                  style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '4px', borderRadius: 6, transition: 'all 0.15s' }}
+                                  onMouseEnter={e => e.currentTarget.style.color = '#ef4444'}
+                                  onMouseLeave={e => e.currentTarget.style.color = 'var(--muted)'}
+                                ><Trash2 size={13} /></button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => { resetForm(); setIsAddingAgenda(true); }}
+                    style={{ background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 12, padding: '12px 20px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 14, transition: 'all 0.2s' }}
+                    onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
+                    onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                  >
+                    <Plus size={18} /> Add New Event
+                  </button>
                 </div>
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>Tag Color</span>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    {colors.map(c => (
-                      <button 
-                        key={c} 
-                        onClick={() => setNewAgendaColor(c)}
-                        style={{ width: 20, height: 20, borderRadius: '50%', background: c, border: newAgendaColor === c ? '2px solid white' : 'none', cursor: 'pointer', outline: newAgendaColor === c ? `2px solid ${c}88` : 'none', outlineOffset: 1 }}
-                      />
-                    ))}
+              ) : (
+                <div style={{ padding: '28px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <button onClick={resetForm} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4, borderRadius: 6, display: 'flex' }}
+                      onMouseEnter={e => e.currentTarget.style.color = 'var(--fg)'}
+                      onMouseLeave={e => e.currentTarget.style.color = 'var(--muted)'}
+                    ><ChevronLeft size={16} /></button>
+                    <h3 style={{ margin: 0, fontSize: 17, color: 'var(--heading)' }}>{editingAgendaId ? 'Edit Event' : 'New Event'}</h3>
+                  </div>
+
+                  {/* Time */}
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: 8 }}>Start Time</label>
+                      <input type="time" value={newAgendaTime} onChange={e => setNewAgendaTime(e.target.value)}
+                        style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.15)', color: 'var(--fg)', fontSize: 14, boxSizing: 'border-box' }} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: 8 }}>End (Optional)</label>
+                      <input type="time" value={newAgendaEndTime} onChange={e => setNewAgendaEndTime(e.target.value)}
+                        style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.15)', color: 'var(--fg)', fontSize: 14, boxSizing: 'border-box' }} />
+                    </div>
+                  </div>
+
+                  {/* Title */}
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: 8 }}>Title</label>
+                    <input type="text" placeholder="Event title..." value={newAgendaTitle} onChange={e => setNewAgendaTitle(e.target.value)}
+                      style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.15)', color: 'var(--fg)', fontSize: 14, boxSizing: 'border-box' }} />
+                  </div>
+
+                  {/* Description */}
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: 8 }}>Description</label>
+                    <textarea placeholder="Notes, location, link..." value={newAgendaDescription} onChange={e => setNewAgendaDescription(e.target.value)} rows={3}
+                      style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.15)', color: 'var(--fg)', fontSize: 13, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }} />
+                  </div>
+
+                  {/* Category */}
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: 10 }}>Category</label>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {Object.entries(CATEGORY_CONFIG).map(([key, cat]) => (
+                        <button key={key}
+                          onClick={() => setNewAgendaCategory(key as 'work'|'personal'|'study'|'fun'|'other')}
+                          style={{
+                            padding: '7px 14px', borderRadius: 10, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                            background: newAgendaCategory === key ? cat.color : 'rgba(255,255,255,0.05)',
+                            color: newAgendaCategory === key ? '#fff' : 'var(--muted)',
+                            border: `1px solid ${newAgendaCategory === key ? cat.color : 'var(--border)'}`,
+                            transition: 'all 0.15s'
+                          }}
+                        >{cat.emoji} {cat.label}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Tag Color */}
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: 10 }}>Tag Color</label>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      {colors.map(c => (
+                        <button key={c} onClick={() => setNewAgendaColor(c)}
+                          style={{ width: 28, height: 28, borderRadius: '50%', background: c, border: newAgendaColor === c ? '3px solid #fff' : '3px solid transparent', cursor: 'pointer', outline: newAgendaColor === c ? `3px solid ${c}88` : 'none', outlineOffset: 2, transition: 'all 0.15s', transform: newAgendaColor === c ? 'scale(1.15)' : 'scale(1)' }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Repeat */}
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: 8 }}>🔁 Repeat</label>
+                    <select value={newAgendaRecurrence} onChange={e => setNewAgendaRecurrence(e.target.value as any)}
+                      style={{ width: '100%', padding: '10px 14px', borderRadius: 10, border: '1px solid var(--border)', background: 'rgba(0,0,0,0.15)', color: 'var(--fg)', fontSize: 14, cursor: 'pointer', boxSizing: 'border-box' }}>
+                      <option value="none">Does not repeat</option>
+                      <option value="daily">Every day</option>
+                      <option value="weekly">Every week</option>
+                      <option value="monthly">Every month</option>
+                    </select>
+                  </div>
+
+                  {/* Actions */}
+                  <div style={{ display: 'flex', gap: 10, paddingTop: 4 }}>
+                    <button onClick={() => {
+                      if (!newAgendaTitle || !newAgendaTime) return;
+                      const agendaData = { dateStr: selectedDateStr, time: newAgendaTime, endTime: newAgendaEndTime || undefined, title: newAgendaTitle, color: newAgendaColor, description: newAgendaDescription, recurrence: newAgendaRecurrence, category: newAgendaCategory };
+                      if (editingAgendaId) { handleEditAgenda({ id: editingAgendaId, ...agendaData }); }
+                      else { handleAddAgenda(agendaData); }
+                      resetForm();
+                    }} style={{ flex: 1, background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 10, padding: '12px 20px', fontWeight: 700, cursor: 'pointer', fontSize: 14, transition: 'opacity 0.2s' }}
+                      onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
+                      onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                    >Save Event</button>
+                    <button onClick={resetForm}
+                      style={{ background: 'transparent', color: 'var(--fg)', border: '1px solid var(--border)', borderRadius: 10, padding: '12px 20px', cursor: 'pointer', fontSize: 14 }}
+                    >Cancel</button>
                   </div>
                 </div>
-
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={() => {
-                    if (!newAgendaTitle || !newAgendaTime) return;
-                    if (editingAgendaId) {
-                      handleEditAgenda({ id: editingAgendaId, dateStr: selectedDateStr, time: newAgendaTime, title: newAgendaTitle, color: newAgendaColor });
-                    } else {
-                      handleAddAgenda({ dateStr: selectedDateStr, time: newAgendaTime, title: newAgendaTitle, color: newAgendaColor });
-                    }
-                    resetForm();
-                  }} style={{ flex: 1, background: 'var(--accent)', color: '#000', border: 'none', borderRadius: 6, padding: 8, fontWeight: 'bold', cursor: 'pointer', fontSize: 14 }}>Save</button>
-                  <button onClick={resetForm} style={{ flex: 1, background: 'transparent', color: 'var(--heading)', border: '1px solid var(--border)', borderRadius: 6, padding: 8, cursor: 'pointer', fontSize: 14 }}>Cancel</button>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }
@@ -952,7 +1185,7 @@ function NotesWidget({ currentUser, onGenerateAI }: { currentUser: User; onGener
     return true;
   });
 
-  const palette = ['transparent', '#e57373', '#f06292', '#ba68c8', '#9575cd', '#7986cb', '#64b5f6', '#4fc3f7', '#4dd0e1', '#4db6ac', '#81c784', '#aed581', '#ff8a65', '#d4e157', '#ffd54f', '#ffb74d'];
+  const palette = ['transparent', ...THEME_COLORS];
 
   function renderNoteCard(note: Note) {
     const isExpanded = expandedNote === note.id;
@@ -1315,22 +1548,9 @@ export const BOARD_ICONS: Record<string, React.ComponentType<any>> = {
   'Folder': Folder,
   'FileText': FileText,
   'Calendar': Calendar,
-  'Settings': Settings,
   'Briefcase': Briefcase,
   'Target': Target,
-  'Rocket': Rocket,
-  'Code': Code,
-  'GraduationCap': GraduationCap,
-  'Home': Home,
-  'Heart': Heart,
-  'Zap': Zap,
-  'Sparkles': Sparkles,
-  'List': List,
-  'BookOpen': BookOpen,
-  'Activity': Activity,
-  'Archive': Archive,
-  'Compass': Compass,
-  'Award': Award
+  'Star': Sparkles
 };
 
 export function BoardIcon({ iconName, size = 24, color = 'var(--accent)' }: { iconName: string, size?: number, color?: string }) {
@@ -1375,9 +1595,7 @@ function KanbanWidget({
   const [editBoardColor, setEditBoardColor] = useState<string | undefined>();
   const [showEditBoardIconPopover, setShowEditBoardIconPopover] = useState(false);
 
-  const BOARD_COLORS = [
-    '#ef4444', '#f97316', '#f59e0b', '#10b981', '#06b6d4', '#3b82f6', '#8b5cf6', '#d946ef', '#f43f5e'
-  ];
+  const BOARD_COLORS = THEME_COLORS;
 
   // Handle Drag & Drop
   const handleDragStart = (e: React.DragEvent, id: string) => {
@@ -1587,7 +1805,8 @@ function KanbanWidget({
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-              gap: '24px'
+              gap: '24px',
+              paddingTop: '8px'
             }}>
               {filteredBoards.map(board => {
                 const todoCount = board.tasks.filter(t => t.column === 'todo').length;
@@ -1739,7 +1958,7 @@ function KanbanWidget({
         {/* Create Board Modal */}
         {showNewBoardModal && (
           <div className="settings-overlay" style={{ zIndex: 300 }} onClick={() => setShowNewBoardModal(false)}>
-            <div className="settings-modal" style={{ maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+            <div className="settings-modal" style={{ maxWidth: '420px', overflow: 'visible' }} onClick={e => e.stopPropagation()}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                 <h3 style={{ margin: 0, fontSize: '18px', fontFamily: 'Outfit', fontWeight: 700 }}>New Board</h3>
                 <button onClick={() => setShowNewBoardModal(false)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4 }}>
@@ -1878,7 +2097,7 @@ function KanbanWidget({
         {/* Edit Board Modal */}
         {editingBoardId && (
           <div className="settings-overlay" style={{ zIndex: 300 }} onClick={() => setEditingBoardId(null)}>
-            <div className="settings-modal" style={{ maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+            <div className="settings-modal" style={{ maxWidth: '420px', overflow: 'visible' }} onClick={e => e.stopPropagation()}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                 <h3 style={{ margin: 0, fontSize: '18px', fontFamily: 'Outfit', fontWeight: 700 }}>Edit Board</h3>
                 <button onClick={() => setEditingBoardId(null)} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 4 }}>
@@ -2359,14 +2578,24 @@ function KanbanWidget({
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
                       <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--heading)', lineHeight: 1.4 }}>{task.text}</span>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }} 
-                        style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 0, alignSelf: 'flex-start', opacity: 0.5 }}
-                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
-                        onMouseLeave={e => e.currentTarget.style.opacity = '0.5'}
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      <div style={{ display: 'flex', gap: '8px', alignSelf: 'flex-start' }}>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); openEditModal(task); }}
+                          style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '4px', borderRadius: '4px', opacity: 0.5, transition: 'all 0.2s' }}
+                          onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.color = 'var(--muted)'; e.currentTarget.style.background = 'none'; }}
+                        >
+                          <Edit2 size={13} />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
+                          style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '4px', borderRadius: '4px', opacity: 0.5, transition: 'all 0.2s' }}
+                          onMouseEnter={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.color = 'var(--muted)'; e.currentTarget.style.background = 'none'; }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
 
                     {/* Description Indicator */}
@@ -2732,7 +2961,7 @@ function ChartWidget({ charts, setCharts }: { charts: Chart[], setCharts: (data:
     );
   }
 
-  const COLORS = ['#ffb703', '#3b82f6', '#22c55e', '#ef4444', '#a855f7', '#06b6d4', '#f97316'];
+  const COLORS = THEME_COLORS;
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -3399,7 +3628,7 @@ const MOTIVATIONAL_QUOTES = [
 
 function AppContent() {
   const [currentUser, setCurrentUser] = useState<any>(() => JSON.parse(localStorage.getItem('odysseus_currentUser') || 'null'));
-  const [activeView, setActiveView] = useState<'chat' | 'research' | 'calendar' | 'notes' | 'kanban' | 'visualizer' | 'history' | 'library'>('chat');
+  const [activeView, setActiveView] = useState<'chat' | 'research' | 'calendar' | 'notes' | 'kanban' | 'visualizer' | 'history' | 'library' | 'translate'>('chat');
   const { sessionId } = useParams();
   const navigate = useNavigate();
   
@@ -3843,6 +4072,7 @@ function AppContent() {
   const [settingsTab, setSettingsTab] = useState('api');
   const [showSettings, setShowSettings] = useState(!localStorage.getItem('groq_api_key'));
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 768);
+  const [isToolsDropdownOpen, setIsToolsDropdownOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const recentlyCreatedSessionRef = useRef<string | null>(null);
@@ -4822,7 +5052,7 @@ Do not use any tool to write the document, just output the block.`
             </button>
           </div>
           
-          <ul className="menu-list" style={{ flexShrink: 0 }}>
+          <ul className="menu-list hide-scrollbar" style={{ flex: 1, overflowY: 'auto' }}>
           <li className={`menu-item ${activeView === 'chat' ? 'active' : ''}`} onClick={() => { handleSidebarClick('chat'); if(window.innerWidth <= 768) setIsSidebarOpen(false); }}>
             <MessageSquare size={18} /> Chat
           </li>
@@ -4831,21 +5061,44 @@ Do not use any tool to write the document, just output the block.`
           }}>
             <Search size={18} /> Deep Research
           </li>
-          <li className={`menu-item ${activeView === 'calendar' ? 'active' : ''}`} onClick={() => { 
-            handleSidebarClick('calendar'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
-          }}>
-            <Calendar size={18} /> Calendar & Clock
+          <li className="menu-item" onClick={() => setIsToolsDropdownOpen(!isToolsDropdownOpen)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Briefcase size={18} /> Tools
+            </div>
+            <div style={{ transform: isToolsDropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.3s ease-in-out', display: 'flex' }}>
+              <ChevronDown size={16} />
+            </div>
           </li>
-          <li className={`menu-item ${activeView === 'notes' ? 'active' : ''}`} onClick={() => { 
-            handleSidebarClick('notes'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateRows: isToolsDropdownOpen ? '1fr' : '0fr',
+            transition: 'grid-template-rows 0.3s ease-in-out'
           }}>
-            <FileText size={18} /> Notepads & To-Do
-          </li>
-          <li className={`menu-item ${activeView === 'kanban' ? 'active' : ''}`} onClick={() => { 
-            handleSidebarClick('kanban'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
-          }}>
-            <Layout size={18} /> Kanban Board
-          </li>
+            <div style={{ overflow: 'hidden' }}>
+              <div style={{ paddingLeft: '24px', display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px', paddingBottom: isToolsDropdownOpen ? '8px' : '0' }}>
+                <li className={`menu-item ${activeView === 'calendar' ? 'active' : ''}`} onClick={() => { 
+                  handleSidebarClick('calendar'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
+                }}>
+                  <Calendar size={18} /> Calendar & Clock
+                </li>
+                <li className={`menu-item ${activeView === 'notes' ? 'active' : ''}`} onClick={() => { 
+                  handleSidebarClick('notes'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
+                }}>
+                  <FileText size={18} /> Notepads & To-Do
+                </li>
+                <li className={`menu-item ${activeView === 'kanban' ? 'active' : ''}`} onClick={() => { 
+                  handleSidebarClick('kanban'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
+                }}>
+                  <Layout size={18} /> Kanban Board
+                </li>
+                <li className={`menu-item ${activeView === 'translate' ? 'active' : ''}`} onClick={() => { 
+                  handleSidebarClick('translate'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
+                }}>
+                  <Languages size={18} /> Translator
+                </li>
+              </div>
+            </div>
+          </div>
           <li className={`menu-item ${activeView === 'visualizer' ? 'active' : ''}`} onClick={() => { 
             handleSidebarClick('visualizer'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
           }}>
@@ -4917,12 +5170,12 @@ Do not use any tool to write the document, just output the block.`
           </div>
           
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            {(activeView === 'calendar' || activeView === 'research' || activeView === 'kanban' || activeView === 'visualizer') ? (
+            {(activeView === 'calendar' || activeView === 'research' || activeView === 'kanban' || activeView === 'visualizer' || activeView === 'translate' || activeView === 'notes') ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {activeView === 'calendar' ? <Calendar size={18} color="var(--accent)" /> : activeView === 'kanban' ? <Layout size={18} color="var(--accent)" /> : activeView === 'visualizer' ? <PieChartIcon size={18} color="var(--accent)" /> : <Search size={18} color="var(--accent)" />}
+                  {activeView === 'calendar' ? <Calendar size={18} color="var(--accent)" /> : activeView === 'kanban' ? <Layout size={18} color="var(--accent)" /> : activeView === 'notes' ? <FileText size={18} color="var(--accent)" /> : activeView === 'visualizer' ? <PieChartIcon size={18} color="var(--accent)" /> : activeView === 'translate' ? <Languages size={18} color="var(--accent)" /> : <Search size={18} color="var(--accent)" />}
                   <span className="hide-mobile" style={{ fontSize: '15px', fontWeight: 600, color: 'var(--heading)' }}>
-                    {activeView === 'calendar' ? 'Calendar & Clock' : activeView === 'kanban' ? 'Kanban Board' : activeView === 'visualizer' ? 'Data Visualizer' : 'Research Document'}
+                    {activeView === 'calendar' ? 'Calendar & Clock' : activeView === 'kanban' ? 'Kanban Board' : activeView === 'notes' ? 'Notepads & To-Do' : activeView === 'visualizer' ? 'Data Visualizer' : activeView === 'translate' ? 'AI Translator' : 'Research Document'}
                   </span>
                 </div>
 
@@ -4945,7 +5198,7 @@ Do not use any tool to write the document, just output the block.`
                       {isEditingDoc ? <><Eye size={14}/> <span className="hide-mobile">Preview</span></> : <><Edit2 size={14}/> <span className="hide-mobile">Edit</span></>}
                     </button>
                   )}
-                  {activeView !== 'calendar' && activeView !== 'kanban' && (
+                  {activeView !== 'calendar' && activeView !== 'kanban' && activeView !== 'translate' && activeView !== 'notes' && (
                     isDocPaneOpen ? (
                       <button className="icon-btn" onClick={() => setIsDocPaneOpen(false)} title="Close Side Panel">
                         <PanelRightClose size={20} />
@@ -4997,7 +5250,7 @@ Do not use any tool to write the document, just output the block.`
             selectedDateStr={selectedDateStr} 
             setSelectedDateStr={setSelectedDateStr} 
           />
-        ) : activeView === 'kanban' ? (
+        ) : activeView === 'translate' ? null : activeView === 'kanban' ? (
           <KanbanWidget 
             boards={kanbanBoards} 
             setBoards={(newBoards) => {
@@ -5063,6 +5316,15 @@ Do not use any tool to write the document, just output the block.`
                </div>
           </div>
         )}
+
+        <div style={{ display: activeView === 'translate' ? 'flex' : 'none', flex: 1, flexDirection: 'column', overflow: 'hidden' }}>
+          <TranslatorWidget 
+            apiKey={apiKey} 
+            baseURL={baseURL} 
+            aiModels={aiModels} 
+            activeModelId={activeModelId} 
+          />
+        </div>
 
         {/* Settings Modal */}
         {showSettings && (
@@ -5248,7 +5510,7 @@ Do not use any tool to write the document, just output the block.`
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
                   <label style={{ color: 'var(--accent)', fontSize: '14px', fontWeight: 600 }}>Theme Accent</label>
                   <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                    {['#ffb703', '#3b82f6', '#10b981', '#ef4444', '#8b5cf6', '#ec4899'].map(color => (
+                    {THEME_COLORS.map(color => (
                       <div 
                         key={color}
                         onClick={() => setThemeColor(color)}
