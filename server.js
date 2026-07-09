@@ -6,6 +6,8 @@ import { dirname, join } from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import os from 'os';
+import sharp from 'sharp';
+import multer from 'multer';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -53,6 +55,17 @@ if (!fs.existsSync(libDir)) {
 if (!fs.existsSync(notesImgDir)) {
   fs.mkdirSync(notesImgDir, { recursive: true });
 }
+
+const uploadLibrary = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, libDir),
+    filename: (req, file, cb) => {
+      const docId = req.body.id || crypto.randomUUID();
+      req.body.id = docId;
+      cb(null, `${docId}_${file.originalname}`);
+    }
+  })
+});
 
 const db = new Database(join(dbDir, 'hakuen.db'));
 
@@ -132,6 +145,7 @@ try { db.exec("ALTER TABLE calendar_events ADD COLUMN description TEXT"); } catc
 try { db.exec("ALTER TABLE calendar_events ADD COLUMN recurrence TEXT DEFAULT 'none'"); } catch (e) {}
 try { db.exec("ALTER TABLE calendar_events ADD COLUMN category TEXT DEFAULT 'other'"); } catch (e) {}
 try { db.exec("ALTER TABLE calendar_events ADD COLUMN end_time TEXT"); } catch (e) {}
+try { db.exec("ALTER TABLE documents ADD COLUMN parent_id TEXT"); } catch (e) {}
 
 // Migration script: Move old JSON notes from chat_sessions to notes table
 try {
@@ -175,6 +189,64 @@ try {
 } catch (error) {
   console.error("Migration error:", error);
 }
+
+function cleanupOrphanedFiles() {
+  console.log('Running self-healing check for orphaned media files...');
+  try {
+    if (fs.existsSync(libDir)) {
+      const files = fs.readdirSync(libDir);
+      const validPaths = new Set(
+        db.prepare('SELECT path FROM documents WHERE path IS NOT NULL').all().map(row => row.path)
+      );
+      let cleanedDocsCount = 0;
+      for (const file of files) {
+        const fullPath = join(libDir, file);
+        if (fs.statSync(fullPath).isFile()) {
+          if (!validPaths.has(fullPath)) {
+            try {
+              fs.unlinkSync(fullPath);
+              cleanedDocsCount++;
+            } catch (e) {
+              console.error(`Failed to delete orphaned library file ${file}:`, e.message);
+            }
+          }
+        }
+      }
+      if (cleanedDocsCount > 0) {
+        console.log(`Cleaned up ${cleanedDocsCount} orphaned library files from disk.`);
+      }
+    }
+
+    if (fs.existsSync(notesImgDir)) {
+      const files = fs.readdirSync(notesImgDir);
+      const validImages = new Set(
+        db.prepare("SELECT bg_image FROM notes WHERE bg_image IS NOT NULL AND bg_image != ''").all().map(row => row.bg_image)
+      );
+      let cleanedNotesImgCount = 0;
+      for (const file of files) {
+        const fullPath = join(notesImgDir, file);
+        if (fs.statSync(fullPath).isFile()) {
+          if (!validImages.has(file)) {
+            try {
+              fs.unlinkSync(fullPath);
+              cleanedNotesImgCount++;
+            } catch (e) {
+              console.error(`Failed to delete orphaned note image ${file}:`, e.message);
+            }
+          }
+        }
+      }
+      if (cleanedNotesImgCount > 0) {
+        console.log(`Cleaned up ${cleanedNotesImgCount} orphaned note background images from disk.`);
+      }
+    }
+  } catch (error) {
+    console.error('Error during orphaned files cleanup:', error.message);
+  }
+}
+
+// Run cleanup of orphaned media files on startup
+cleanupOrphanedFiles();
 
 // API Routes
 app.post('/api/register', (req, res) => {
@@ -287,8 +359,29 @@ app.post('/api/users/login-by-token', (req, res) => {
 
 app.delete('/api/users/:id', (req, res) => {
   const { id } = req.params;
-  db.prepare('DELETE FROM users WHERE id = ?').run(id);
-  res.json({ success: true });
+  try {
+    // 1. Delete all user documents from disk
+    const docs = db.prepare('SELECT path FROM documents WHERE user_id = ?').all(id);
+    for (const doc of docs) {
+      if (doc.path && fs.existsSync(doc.path)) {
+        try { fs.unlinkSync(doc.path); } catch (e) {}
+      }
+    }
+    
+    // 2. Delete all user note background images from disk
+    const notes = db.prepare('SELECT bg_image FROM notes WHERE user_id = ?').all(id);
+    for (const note of notes) {
+      if (note.bg_image) {
+        try { fs.unlinkSync(join(notesImgDir, note.bg_image)); } catch (e) {}
+      }
+    }
+    
+    // 3. Delete user from DB (will cascade delete rows in tables due to FKs)
+    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Generic Data Key-Value Store for kanban, etc.
@@ -421,7 +514,7 @@ app.post('/api/notes/image/:userId', (req, res) => {
     const fileId = crypto.randomUUID();
     if (base64) {
       const filePath = join(notesImgDir, `${fileId}_${filename}`);
-      const base64Data = base64.replace(/^data:([A-Za-z-+/]+);base64,/, '');
+      const base64Data = base64.replace(/^data:.*?;base64,/, '');
       fs.writeFileSync(filePath, base64Data, 'base64');
       res.json({ success: true, filename: `${fileId}_${filename}` });
     } else {
@@ -539,33 +632,54 @@ app.delete('/api/sessions/:userId/:sessionId', (req, res) => {
 app.get('/api/library/:userId', (req, res) => {
   const { userId } = req.params;
   try {
-    const docs = db.prepare('SELECT id, session_id, filename, type, content, created_at FROM documents WHERE user_id = ? ORDER BY created_at DESC').all(userId);
-    res.json(docs);
+    const docs = db.prepare("SELECT id, session_id, filename, type, content, path, parent_id, created_at FROM documents WHERE user_id = ? ORDER BY CASE WHEN type = 'folder' THEN 0 ELSE 1 END, created_at DESC").all(userId);
+    const docsWithSize = docs.map(doc => {
+      let size = 0;
+      if (doc.type !== 'folder') {
+        try {
+          if (doc.path && fs.existsSync(doc.path)) {
+            size = fs.statSync(doc.path).size;
+          } else if (doc.content) {
+            size = Buffer.byteLength(doc.content, 'utf8');
+          }
+        } catch (e) {}
+      }
+      // Remove path from response for security
+      const { path, ...rest } = doc;
+      return { ...rest, size };
+    });
+    res.json(docsWithSize);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/library/:userId', (req, res) => {
+app.post('/api/library/:userId', uploadLibrary.single('file'), (req, res) => {
   const { userId } = req.params;
-  const { id, session_id, filename, type, content, base64 } = req.body;
+  const { id, session_id, filename, type, content, base64, parent_id } = req.body;
   
+  let filePath = null;
   try {
     const docId = id || crypto.randomUUID();
-    let filePath = null;
     
-    // Save physical file if base64 is provided
+    // Save physical file if base64 is provided (legacy support)
     if (base64) {
       filePath = join(libDir, `${docId}_${filename}`);
-      const base64Data = base64.replace(/^data:([A-Za-z-+/]+);base64,/, '');
+      const base64Data = base64.replace(/^data:.*?;base64,/, '');
       fs.writeFileSync(filePath, base64Data, 'base64');
+    } else if (req.file) {
+      // New streaming upload support
+      filePath = req.file.path;
     }
 
-    db.prepare('INSERT INTO documents (id, user_id, session_id, filename, type, content, path) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      docId, userId, session_id || null, filename, type, content, filePath
+    db.prepare('INSERT INTO documents (id, user_id, session_id, filename, type, content, path, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      docId, userId, session_id || null, filename, type, content || null, filePath, parent_id || null
     );
     res.json({ success: true, id: docId });
   } catch (error) {
+    if (filePath && fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch (e) {}
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -573,14 +687,54 @@ app.post('/api/library/:userId', (req, res) => {
 app.get('/api/library/file/:id', (req, res) => {
   const { id } = req.params;
   try {
+    const doc = db.prepare('SELECT path, type, filename, content FROM documents WHERE id = ?').get(id);
+    if (!doc) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    let contentType = doc.type;
+    const ext = doc.filename.split('.').pop().toLowerCase();
+    if (ext === 'mp4') contentType = 'video/mp4';
+    else if (ext === 'webm') contentType = 'video/webm';
+    else if (ext === 'mkv') contentType = 'video/x-matroska';
+    else if (ext === 'ogg') contentType = 'video/ogg';
+
+    if (!doc.path || !fs.existsSync(doc.path)) {
+      if (doc.content) {
+        const base64Data = doc.content.startsWith('data:') ? doc.content.split(',')[1] : doc.content;
+        const buffer = Buffer.from(base64Data, 'base64');
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(doc.filename)}`);
+        return res.send(buffer);
+      }
+      return res.status(404).json({ error: 'File not found on disk or database' });
+    }
+    
+    res.sendFile(doc.path, {
+      headers: {
+        'Content-Type': contentType,
+        'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(doc.filename)}`
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/library/thumb/:id', (req, res) => {
+  const { id } = req.params;
+  try {
     const doc = db.prepare('SELECT path, type, filename FROM documents WHERE id = ?').get(id);
     if (!doc || !doc.path || !fs.existsSync(doc.path)) {
       return res.status(404).json({ error: 'File not found on disk' });
     }
-    res.setHeader('Content-Type', doc.type);
-    res.setHeader('Content-Disposition', `inline; filename="${doc.filename}"`);
-    const fileStream = fs.createReadStream(doc.path);
-    fileStream.pipe(res);
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=31536000');
+    
+    sharp(doc.path)
+      .resize(300, 200, { fit: 'cover' })
+      .jpeg({ quality: 80 })
+      .pipe(res);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -589,13 +743,19 @@ app.get('/api/library/file/:id', (req, res) => {
 app.delete('/api/library/:userId/:id', (req, res) => {
   const { userId, id } = req.params;
   try {
-    const doc = db.prepare('SELECT path FROM documents WHERE id = ? AND user_id = ?').get(id, userId);
-    if (doc) {
-      if (doc.path && fs.existsSync(doc.path)) {
-        fs.unlinkSync(doc.path);
+    const deleteRecursive = (docId) => {
+      const children = db.prepare('SELECT id FROM documents WHERE parent_id = ? AND user_id = ?').all(docId, userId);
+      for (const child of children) {
+        deleteRecursive(child.id);
       }
-      db.prepare('DELETE FROM documents WHERE id = ? AND user_id = ?').run(id, userId);
-    }
+      const doc = db.prepare('SELECT path FROM documents WHERE id = ? AND user_id = ?').get(docId, userId);
+      if (doc && doc.path && fs.existsSync(doc.path)) {
+        try { fs.unlinkSync(doc.path); } catch (e) {}
+      }
+      db.prepare('DELETE FROM documents WHERE id = ? AND user_id = ?').run(docId, userId);
+    };
+    
+    deleteRecursive(id);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -604,9 +764,17 @@ app.delete('/api/library/:userId/:id', (req, res) => {
 
 app.put('/api/library/:userId/:id', (req, res) => {
   const { userId, id } = req.params;
-  const { filename } = req.body;
+  const { filename, parent_id } = req.body;
   try {
-    db.prepare('UPDATE documents SET filename = ? WHERE id = ? AND user_id = ?').run(filename, id, userId);
+    const updates = [];
+    const values = [];
+    if (filename !== undefined) { updates.push('filename = ?'); values.push(filename); }
+    if (parent_id !== undefined) { updates.push('parent_id = ?'); values.push(parent_id); }
+    
+    if (updates.length > 0) {
+      values.push(id, userId);
+      db.prepare(`UPDATE documents SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`).run(...values);
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

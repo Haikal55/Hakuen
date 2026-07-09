@@ -121,11 +121,58 @@ export const api = {
     return await res.json();
   },
 
-  async uploadToLibrary(userId: any, documentData: any) {
+  uploadToLibrary(userId: any, documentData: { filename: string, type: string, content?: string, file?: File, base64?: string, parent_id?: string | null }, onProgress?: (progressEvent: ProgressEvent) => void): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_URL}/library/${userId}`);
+      
+      if (onProgress && xhr.upload) {
+        xhr.upload.onprogress = onProgress;
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch (e) {
+            resolve(xhr.responseText);
+          }
+        } else {
+          reject(new Error(xhr.responseText || 'Upload failed'));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network Error'));
+
+      if (documentData.file) {
+        const formData = new FormData();
+        formData.append('filename', documentData.filename);
+        formData.append('type', documentData.type);
+        if (documentData.parent_id) formData.append('parent_id', documentData.parent_id);
+        if (documentData.content) formData.append('content', documentData.content);
+        if (documentData.base64) formData.append('base64', documentData.base64);
+        
+        // Append file LAST so body fields are available to multer
+        formData.append('file', documentData.file);
+        
+        xhr.send(formData);
+      } else {
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.send(JSON.stringify(documentData));
+      }
+    });
+  },
+
+  async createFolder(userId: any, folderName: string, parentId?: string | null) {
     const res = await fetch(`${API_URL}/library/${userId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(documentData)
+      body: JSON.stringify({
+        filename: folderName,
+        type: 'folder',
+        content: null,
+        parent_id: parentId || null
+      })
     });
     return await res.json();
   },
@@ -134,11 +181,11 @@ export const api = {
     await fetch(`${API_URL}/library/${userId}/${documentId}`, { method: 'DELETE' });
   },
 
-  async updateLibraryFilename(userId: any, documentId: any, newFilename: string) {
+  async updateLibraryItem(userId: any, documentId: any, updates: { filename?: string, parent_id?: string | null }) {
     await fetch(`${API_URL}/library/${userId}/${documentId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename: newFilename })
+      body: JSON.stringify(updates)
     });
   },
 

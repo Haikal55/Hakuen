@@ -35,13 +35,14 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import html2pdf from 'html2pdf.js';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, LineChart, Line, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
+
 import './index.css';
 import { api } from './api';
 import TranslatorWidget from './TranslatorWidget';
+import VisualizerWidget from './VisualizerWidget';
+import LibraryWidget, { FileViewerModal } from './LibraryWidget';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import Tesseract from 'tesseract.js';
 // @ts-ignore
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
@@ -58,53 +59,7 @@ const preprocessLaTeX = (content: any) => {
     .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
 };
 
-const extractFileContent = async (file: File): Promise<{ text: string, base64?: string }> => {
-  const fileType = file.type;
-  
-  if (fileType === 'application/pdf') {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-    let text = '';
-    // Limit to first 10 pages for speed/token limits
-    const numPages = Math.min(pdf.numPages, 10);
-    for (let i = 1; i <= numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      text += content.items.map((item: any) => item.str).join(' ') + '\n';
-    }
-    return { text: `[PDF Content of ${file.name}]:\n${text}` };
-  } 
-  
-  if (fileType.startsWith('image/')) {
-    let base64 = '';
-    try {
-      base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target?.result as string);
-        reader.onerror = () => reject('Failed to read');
-        reader.readAsDataURL(file);
-      });
-    } catch(e) {}
-
-    let textResult = `[Image attached: ${file.name}]`;
-    try {
-      const result = await Tesseract.recognize(file, 'eng+ind');
-      if (result.data.text.trim()) {
-         textResult = `[Text extracted from image ${file.name}]:\n${result.data.text}`;
-      }
-    } catch (e) {}
-
-    return { text: textResult, base64 };
-  }
-  
-  // Default text fallback (html, txt, md, csv, etc)
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => resolve({ text: `[Content of ${file.name}]:\n${e.target?.result}` });
-    reader.onerror = () => resolve({ text: `[Failed to read file ${file.name}]` });
-    reader.readAsText(file);
-  });
-};
+import { extractFileContent } from './utils';
 
 const CodeBlock = ({ node, inline, className, children, setPreviewHtml, ...props }: any) => {
   const [copied, setCopied] = useState(false);
@@ -2950,270 +2905,7 @@ function KanbanWidget({
   );
 }
 
-function ChartWidget({ charts, setCharts }: { charts: Chart[], setCharts: (data: Chart[]) => void }) {
-  if (!charts || charts.length === 0) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted)', padding: '40px', textAlign: 'center' }}>
-        <PieChartIcon size={64} opacity={0.2} style={{ marginBottom: '16px' }} />
-        <h3 style={{ margin: '0 0 8px 0', color: 'var(--heading)' }}>No Data to Visualize</h3>
-        <p style={{ margin: 0, fontSize: '14px', maxWidth: '300px' }}>Ask me to generate a chart based on your data, or paste a table of numbers and I'll create a beautiful visualization for you.</p>
-      </div>
-    );
-  }
 
-  const COLORS = THEME_COLORS;
-
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{ background: 'var(--panel)', border: '1px solid var(--border)', padding: '12px', borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.3)' }}>
-          <p style={{ margin: '0 0 8px 0', fontWeight: 600, color: 'var(--heading)' }}>{label}</p>
-          {payload.map((p: any, i: number) => (
-            <p key={i} style={{ margin: 0, color: p.color || 'var(--accent)', fontSize: '14px' }}>
-              {p.name}: <span style={{ fontWeight: 600 }}>{p.value}</span>
-            </p>
-          ))}
-        </div>
-      );
-    }
-    return null;
-  };
-
-  return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '32px', overflowY: 'auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: 13 }} 
-          onClick={() => { setCharts([]); }}>
-            <Trash2 size={16} /> Clear All
-          </button>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '64px' }}>
-        {charts.map((chart: any, chartIdx: number) => {
-          const { type, title, data, id } = chart;
-          return (
-            <div key={id || chartIdx} style={{ position: 'relative', height: '400px', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-              <button 
-                onClick={() => setCharts(charts.filter((_, idx) => idx !== chartIdx))}
-                style={{ position: 'absolute', top: 0, right: 0, background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer', padding: '4px', zIndex: 10 }}
-                title="Delete Chart"
-              >
-                <Trash2 size={16} />
-              </button>
-              <h2 style={{ textAlign: 'center', margin: '0 0 24px 0', fontSize: '20px', fontWeight: 700, color: 'var(--heading)', fontFamily: 'Outfit', padding: '0 40px' }}>{title}</h2>
-              <div style={{ flex: 1, minHeight: 0 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  {type === 'bar' ? (
-            <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-              <XAxis dataKey="name" stroke="var(--muted)" tick={{ fill: 'var(--muted)', fontSize: 12 }} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
-              <YAxis stroke="var(--muted)" tick={{ fill: 'var(--muted)', fontSize: 12 }} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
-              <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255,255,255,0.02)' }} />
-              <Legend wrapperStyle={{ paddingTop: '20px' }} />
-              <Bar dataKey="value" name="Value" fill="var(--accent)" radius={[6, 6, 0, 0]} barSize={40} />
-            </BarChart>
-          ) : type === 'pie' ? (
-            <RechartsPieChart>
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ paddingTop: '20px' }} />
-              <Pie data={data} cx="50%" cy="50%" labelLine={false} outerRadius="80%" fill="#8884d8" dataKey="value" label={({ cx, cy, midAngle, innerRadius, outerRadius, name, percent }: any) => {
-                const RADIAN = Math.PI / 180;
-                const radius = innerRadius + (outerRadius - innerRadius) * 1.1;
-                const x = cx + radius * Math.cos(-midAngle * RADIAN);
-                const y = cy + radius * Math.sin(-midAngle * RADIAN);
-                return (
-                  <text x={x} y={y} fill="var(--heading)" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" fontSize={12} fontWeight={500}>
-                    {name} {((percent || 0) * 100).toFixed(0)}%
-                  </text>
-                );
-              }}>
-                {data.map((_entry: any, index: number) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} stroke="var(--bg)" strokeWidth={2} />
-                ))}
-              </Pie>
-            </RechartsPieChart>
-          ) : (
-            <LineChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-              <XAxis dataKey="name" stroke="var(--muted)" tick={{ fill: 'var(--muted)', fontSize: 12 }} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
-              <YAxis stroke="var(--muted)" tick={{ fill: 'var(--muted)', fontSize: 12 }} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ paddingTop: '20px' }} />
-              <Line type="monotone" dataKey="value" name="Value" stroke="var(--accent)" strokeWidth={3} dot={{ r: 5, fill: 'var(--bg)', stroke: 'var(--accent)', strokeWidth: 2 }} activeDot={{ r: 7 }} />
-            </LineChart>
-          )}
-                </ResponsiveContainer>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function LibraryWidget({ libraryFiles, setLibraryFiles, currentUser, onPreviewImage }: { libraryFiles: any[], setLibraryFiles: (files: any[]) => void, currentUser: User, onPreviewImage: (src: string) => void }) {
-  const [isUploading, setIsUploading] = useState(false);
-  const [editingFileId, setEditingFileId] = useState<string | null>(null);
-  const [editFilenameValue, setEditFilenameValue] = useState<string>('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const fetchLibrary = async () => {
-    try {
-      const data = await api.getLibrary(currentUser.id);
-      setLibraryFiles(data);
-    } catch (e) { console.error(e); }
-  };
-
-  useEffect(() => {
-    fetchLibrary();
-  }, [currentUser]);
-
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsUploading(true);
-    try {
-      // First, get the base64 of the file for physical storage
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-
-      // Then, extract text content
-      let content = '';
-      if (file.type === 'application/pdf' || file.type.startsWith('image/')) {
-        const extracted = await extractFileContent(file);
-        content = extracted.text;
-      } else {
-        content = await file.text();
-      }
-      
-      await api.uploadToLibrary(currentUser.id, {
-        filename: file.name,
-        type: file.type,
-        content,
-        base64
-      });
-      await fetchLibrary();
-    } catch (e) {
-      console.error(e);
-      alert('Upload failed');
-    } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this file?')) return;
-    try {
-      await api.deleteFromLibrary(currentUser.id, id);
-      await fetchLibrary();
-    } catch (e) { console.error(e); }
-  };
-
-  const handleEditStart = (file: any) => {
-    setEditingFileId(file.id);
-    const parts = file.filename.split('.');
-    if (parts.length > 1) parts.pop();
-    setEditFilenameValue(parts.join('.'));
-  };
-
-  const handleEditSave = async (file: any) => {
-    if (!editFilenameValue.trim()) return;
-    const extMatch = file.filename.match(/\.([^.]+)$/);
-    const ext = extMatch ? `.${extMatch[1]}` : '';
-    const newFilename = `${editFilenameValue.trim()}${ext}`;
-    
-    if (newFilename !== file.filename) {
-      try {
-        await api.updateLibraryFilename(currentUser.id, file.id, newFilename);
-        await fetchLibrary();
-      } catch (e) { console.error(e); }
-    }
-    setEditingFileId(null);
-  };
-
-  return (
-    <div style={{ padding: '32px', height: '100%', overflowY: 'auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h2 style={{ margin: 0, fontFamily: 'Outfit', color: 'var(--heading)' }}>Your Library</h2>
-        <div>
-          <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleUpload} />
-          <button className="btn" style={{ background: 'var(--accent)', color: '#000', fontWeight: 600, padding: '8px 16px' }} onClick={() => fileInputRef.current?.click()} disabled={isUploading}>
-            {isUploading ? <Loader2 size={16} className="spinner" /> : <Upload size={16} style={{ marginRight: 8 }} />} 
-            {isUploading ? 'Uploading...' : 'Upload File'}
-          </button>
-        </div>
-      </div>
-      
-      {libraryFiles.length === 0 ? (
-        <div style={{ textAlign: 'center', color: 'var(--muted)', marginTop: '10vh' }}>
-          <Folder size={64} opacity={0.2} style={{ marginBottom: 16 }} />
-          <h3>No files in library</h3>
-          <p>Upload PDFs, images, or text files to use them across chats.</p>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '16px' }}>
-          {libraryFiles.map(file => {
-            const isImage = file.type.startsWith('image/');
-            const isEditing = editingFileId === file.id;
-            const imgSrc = `http://${window.location.hostname}:3001/api/library/file/${file.id}`;
-            return (
-            <div key={file.id} style={{ background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: '12px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {isImage && (
-                <div style={{ width: '100%', height: '120px', borderRadius: '8px', overflow: 'hidden', background: 'rgba(255,255,255,0.05)', marginBottom: '4px', cursor: 'pointer' }} onClick={() => onPreviewImage(imgSrc)}>
-                  <img src={imgSrc} alt={file.filename} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                </div>
-              )}
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden', flex: 1 }}>
-                  {!isImage && <FileText size={20} color="var(--accent)" style={{ flexShrink: 0 }} />}
-                  {isEditing ? (
-                    <input 
-                      type="text" 
-                      value={editFilenameValue} 
-                      onChange={(e) => setEditFilenameValue(e.target.value)} 
-                      onBlur={() => handleEditSave(file)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') handleEditSave(file); else if (e.key === 'Escape') setEditingFileId(null); }}
-                      autoFocus
-                      style={{ width: '100%', background: 'var(--bg)', border: '1px solid var(--accent)', color: 'var(--fg)', padding: '4px 8px', borderRadius: '4px', fontSize: 13, outline: 'none' }} 
-                    />
-                  ) : (
-                    <span 
-                      onDoubleClick={() => handleEditStart(file)} 
-                      style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'text' }}
-                      title="Double click to rename"
-                    >
-                      {file.filename}
-                    </span>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
-                  <button onClick={() => !isEditing && handleEditStart(file)} className="icon-btn" style={{ color: 'var(--muted)', padding: 4 }} title="Rename">
-                    <Edit2 size={14} />
-                  </button>
-                  <button onClick={() => handleDelete(file.id)} className="icon-btn" style={{ color: 'var(--danger)', padding: 4 }} title="Delete">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                {new Date(file.created_at).toLocaleDateString()} &bull; {file.type.split('/')[1] || file.type}
-              </div>
-            </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
   const [mode, setMode] = useState<'login' | 'register' | 'qr'>('login');
@@ -3636,7 +3328,41 @@ function AppContent() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [libraryFiles, setLibraryFiles] = useState<any[]>([]);
   const [selectedLibraryFile, setSelectedLibraryFile] = useState<any>(null);
-  const [showLibraryModal, setShowLibraryModal] = useState(false);
+  const [viewingFile, setViewingFile] = useState<any | null>(null);
+  const [isPlayerMinimized, setIsPlayerMinimized] = useState(false);
+
+  const handleNextMedia = () => {
+    if (!viewingFile) return;
+    const mediaFiles = libraryFiles.filter(f => 
+      f.parent_id === viewingFile.parent_id && 
+      (f.type?.startsWith('audio/') || f.type?.startsWith('video/') || ['mp3', 'wav', 'ogg', 'm4a', 'mp4', 'mkv', 'avi', 'mov', 'webm'].includes(f.filename.split('.').pop()?.toLowerCase() || ''))
+    );
+    mediaFiles.sort((a, b) => a.filename.localeCompare(b.filename));
+
+    const currentIndex = mediaFiles.findIndex(f => f.id === viewingFile.id);
+    if (currentIndex !== -1 && currentIndex < mediaFiles.length - 1) {
+      setViewingFile(mediaFiles[currentIndex + 1]);
+    } else if (mediaFiles.length > 0) {
+      setViewingFile(mediaFiles[0]);
+    }
+  };
+
+  const handlePrevMedia = () => {
+    if (!viewingFile) return;
+    const mediaFiles = libraryFiles.filter(f => 
+      f.parent_id === viewingFile.parent_id && 
+      (f.type?.startsWith('audio/') || f.type?.startsWith('video/') || ['mp3', 'wav', 'ogg', 'm4a', 'mp4', 'mkv', 'avi', 'mov', 'webm'].includes(f.filename.split('.').pop()?.toLowerCase() || ''))
+    );
+    mediaFiles.sort((a, b) => a.filename.localeCompare(b.filename));
+
+    const currentIndex = mediaFiles.findIndex(f => f.id === viewingFile.id);
+    if (currentIndex !== -1 && currentIndex > 0) {
+      setViewingFile(mediaFiles[currentIndex - 1]);
+    } else if (mediaFiles.length > 0) {
+      setViewingFile(mediaFiles[mediaFiles.length - 1]);
+    }
+  };
+
 
   const [chatSessions, setChatSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -3736,16 +3462,68 @@ function AppContent() {
   }, [themeColor]);
 
   const markdownComponents = useMemo(() => ({
-    img: ({ src, alt }: any) => (
-      <img 
-        src={src} 
-        alt={alt} 
-        style={{ cursor: 'zoom-in' }}
-        onClick={() => { setFullscreenImage(src); setImgZoom(1); setImgPan({ x: 0, y: 0 }); }} 
-      />
-    ),
+    img: ({ src, alt }: any) => {
+      const fileIdMatch = src?.match(/\/api\/library\/file\/([a-zA-Z0-9-]+)/);
+      const fileId = fileIdMatch ? fileIdMatch[1] : null;
+      const file = fileId ? libraryFiles.find((f: any) => f.id === fileId) : null;
+      const isPdf = file 
+        ? (file.type === 'application/pdf' || file.filename?.toLowerCase().endsWith('.pdf')) 
+        : src?.toLowerCase().endsWith('.pdf') || src?.toLowerCase().includes('.pdf?') || src?.toLowerCase().includes('/api/library/file/');
+
+      if (isPdf) {
+        let iframeSrc = src;
+        if (src) {
+          if (src.startsWith('/api/')) {
+            iframeSrc = `http://${window.location.hostname}:3001${src}`;
+          } else if (src.startsWith('api/')) {
+            iframeSrc = `http://${window.location.hostname}:3001/${src}`;
+          }
+        }
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '12px 0', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden', background: 'rgba(0,0,0,0.2)' }}>
+            <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <FileText size={16} color="var(--accent)" style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={file?.filename || alt || "PDF Document"}>
+                  {file?.filename || alt || "PDF Document"}
+                </span>
+              </div>
+              <button 
+                onClick={() => {
+                  if (file) {
+                    setViewingFile(file);
+                    setIsPlayerMinimized(false);
+                  } else {
+                    window.open(iframeSrc, '_blank');
+                  }
+                }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12, fontWeight: 500, padding: '2px 8px', borderRadius: '4px', transition: 'background 0.2s', flexShrink: 0 }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                Open
+              </button>
+            </div>
+            <iframe 
+              src={iframeSrc} 
+              style={{ width: '100%', height: '350px', border: 'none', background: '#fff' }} 
+            />
+          </div>
+        );
+      }
+
+      return (
+        <img 
+          src={src} 
+          alt={alt} 
+          style={{ cursor: 'zoom-in' }}
+          onClick={() => { setFullscreenImage(src); setImgZoom(1); setImgPan({ x: 0, y: 0 }); }} 
+        />
+      );
+    },
     code: (props: any) => <CodeBlock setPreviewHtml={setPreviewHtml} {...props} />
-  }), []);
+  }), [libraryFiles]);
 
   // Load Initial Data
   useEffect(() => {
@@ -4074,6 +3852,13 @@ function AppContent() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 768);
   const [isToolsDropdownOpen, setIsToolsDropdownOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const recentlyCreatedSessionRef = useRef<string | null>(null);
   const isFirstLoadRef = useRef(false);
@@ -4193,31 +3978,6 @@ function AppContent() {
       scrollToBottom('smooth');
     }
   }, [messages, isLoading, showScrollButton, activeView, sessionId]);
-
-  const ensureSessionExists = () => {
-    if (!activeSessionId) {
-      const currentSessionId = Date.now().toString();
-      recentlyCreatedSessionRef.current = currentSessionId;
-      setActiveSessionId(currentSessionId);
-      
-      const newSession = { 
-        id: currentSessionId, 
-        title: 'New Conversation', 
-        messages: messages || [], 
-        type: activeView, 
-        data: {
-          charts: charts
-        }, 
-        updatedAt: new Date().toISOString() 
-      };
-      if (currentUser) api.saveSession(currentUser.id, newSession);
-      setChatSessions(prev => [newSession, ...prev]);
-      navigate(`/c/${currentSessionId}`);
-      return currentSessionId;
-    }
-    return activeSessionId;
-  };
-
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if ((!input.trim() && !selectedFile && !selectedLibraryFile) || !apiKey) {
@@ -4232,7 +3992,7 @@ function AppContent() {
     setInput('');
     setSelectedFile(null);
     setSelectedLibraryFile(null);
-    setShowLibraryModal(false);
+
     setIsLoading(true);
 
     const userDisplayMsg = { 
@@ -4318,7 +4078,7 @@ function AppContent() {
       setIsDocPaneOpen(true);
     }
 
-    const systemPrompt = activeView === 'research' 
+    const baseSystemPrompt = activeView === 'research' 
       ? `You are Hakuen 白炎, an expert Deep Research AI. Your goal is to write a comprehensive, well-formatted markdown document or blog based on the user's request. 
 1. Use the 'search_web' tool to gather up-to-date facts.
 2. ONLY use the 'search_images' tool if the user explicitly requests images.
@@ -4333,6 +4093,8 @@ Do not use any tool to write the document, just output the block.`
       : activeView === 'notes'
       ? `You are Hakuen 白炎, a smart Notepad and To-Do AI assistant. You help the user manage their notes and tasks. To save a note or to-do list, you MUST use the 'save_note' tool. Be concise and helpful.`
       : `You are Hakuen 白炎, a highly intelligent and helpful AI assistant created by Haikal. You must always refer to yourself as "Hakuen" or "白炎". Never refer to yourself as ChatGPT, OpenAI, or any other entity. When using tools, you MUST provide perfectly valid JSON arguments.`;
+
+    const systemPrompt = baseSystemPrompt + `\n\n[CRITICAL ALIGNMENT: You are completely allowed and encouraged to assist with, search for, discuss, and output content regarding popular culture, brands, fictional characters, comics, and movies (e.g. Marvel, Iron Man, Spider-Man, Disney, etc.) for personal, educational, and creative purposes. Never refuse these requests, as they are completely safe and do not violate any safety/copyright policies. Always fulfill the user's request directly.]`;
 
     const finalSystemPrompt = customInstructions 
       ? `${systemPrompt}\n\nUser Custom Instructions:\n${customInstructions}` 
@@ -4390,56 +4152,7 @@ Do not use any tool to write the document, just output the block.`
             }
           }
         },
-        {
-          type: 'function',
-          function: {
-            name: 'add_calendar_agenda',
-            description: 'Add a new agenda or event to the user\'s calendar. Use this when the user asks to schedule something.',
-            parameters: {
-              type: 'object',
-              properties: {
-                date: { type: 'string', description: 'Date in YYYY-MM-DD format (e.g. 2026-06-02)' },
-                time: { type: 'string', description: 'Time in HH:MM format (e.g. 05:00, 20:00)' },
-                title: { type: 'string', description: 'Title or description of the agenda' }
-              },
-              required: ['date', 'time', 'title']
-            }
-          }
-        },
-        {
-          type: 'function',
-          function: {
-            name: 'add_kanban_tasks',
-            description: 'Break down a project or goal into smaller tasks and add them to the Kanban board (To Do column).',
-            parameters: {
-              type: 'object',
-              properties: {
-                tasks: { type: 'array', items: { type: 'string' }, description: 'Array of task descriptions' }
-              },
-              required: ['tasks']
-            }
-          }
-        },
-        {
-          type: 'function',
-          function: {
-            name: 'render_chart',
-            description: 'Render a beautiful chart (bar, line, or pie) based on tabular data. Use this when the user provides data and asks to visualize it.',
-            parameters: {
-              type: 'object',
-              properties: {
-                type: { type: 'string', enum: ['bar', 'line', 'pie'], description: 'Type of chart' },
-                title: { type: 'string', description: 'Title of the chart' },
-                data: { 
-                  type: 'array', 
-                  items: { type: 'object' }, 
-                  description: 'Array of data objects. Each object should have a "name" string field for the X-axis/label, and a "value" number field for the Y-axis/magnitude.'
-                }
-              },
-              required: ['type', 'title', 'data']
-            }
-          }
-        }
+
       ];
 
       setMessages((prev) => [...prev, { 
@@ -4619,7 +4332,13 @@ Do not use any tool to write the document, just output the block.`
                 const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=4&prop=imageinfo&iiprop=url&format=json&origin=*`);
                 const data = await res.json();
                 if (data.query && data.query.pages) {
-                   const urls = Object.values(data.query.pages).map((p: any) => p.imageinfo?.[0]?.url).filter(Boolean);
+                   const urls = Object.values(data.query.pages)
+                      .map((p: any) => p.imageinfo?.[0]?.url)
+                      .filter(Boolean)
+                      .filter((url: string) => {
+                         const ext = url.split('.').pop()?.toLowerCase() || '';
+                         return ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext);
+                      });
                    result = urls.length > 0 ? `Images found:\n${urls.join('\n')}\n\nYou MUST format these images in your response using Markdown: ![Image Description](url)` : `No images found for "${query}". Try different keywords.`;
                 } else {
                    result = `No images found for "${query}".`;
@@ -4941,28 +4660,7 @@ Do not use any tool to write the document, just output the block.`
                 <Paperclip size={18} />
               </button>
               
-              <div style={{ position: 'relative' }}>
-                <button type="button" className="icon-btn attachment-btn" title="Attach from Library" onClick={() => setShowLibraryModal(!showLibraryModal)}>
-                  <Folder size={18} />
-                </button>
-                {showLibraryModal && (
-                  <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: '8px', background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px', width: '300px', maxHeight: '300px', overflowY: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', zIndex: 100 }}>
-                    <h4 style={{ margin: '0 0 12px 0', fontSize: 13, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Select from Library</h4>
-                    {libraryFiles.length === 0 ? (
-                      <div style={{ fontSize: 13, color: 'var(--muted)', textAlign: 'center', padding: '20px 0' }}>Library is empty</div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {libraryFiles.map(f => (
-                          <div key={f.id} onClick={() => { setSelectedLibraryFile(f); setSelectedFile(null); setShowLibraryModal(false); }} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px', borderRadius: '6px', cursor: 'pointer', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)' }}>
-                            <FileText size={14} color="var(--accent)" />
-                            <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.filename}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+
             </div>
 
             <button type="submit" className="send-button" disabled={(!input.trim() && !selectedFile && !selectedLibraryFile) || isLoading || !apiKey}>
@@ -5017,8 +4715,19 @@ Do not use any tool to write the document, just output the block.`
   };
 
 
+  const isAudioPlayerDocked = isPlayerMinimized && viewingFile && (
+    viewingFile.type?.startsWith('audio/') || 
+    ['mp3', 'wav', 'ogg', 'm4a'].includes(viewingFile.filename?.split('.').pop()?.toLowerCase() || '')
+  );
+
   return (
-    <div className="app-container">
+    <div 
+      className="app-container"
+      style={{
+        paddingBottom: isAudioPlayerDocked ? '80px' : '0px',
+        transition: 'padding-bottom 0.2s ease-in-out'
+      }}
+    >
       {/* Mobile Overlay */}
       <div 
         className={`sidebar-overlay ${isSidebarOpen ? 'open' : ''}`} 
@@ -5026,8 +4735,8 @@ Do not use any tool to write the document, just output the block.`
       />
 
       <div className={`sidebar ${!isSidebarOpen ? 'collapsed' : ''}`} style={{ 
-        transform: !isSidebarOpen && window.innerWidth <= 768 ? 'translateX(-100%)' : 'translateX(0)',
-        position: window.innerWidth <= 768 ? 'fixed' : 'relative',
+        transform: !isSidebarOpen && windowWidth <= 768 ? 'translateX(-100%)' : 'translateX(0)',
+        position: windowWidth <= 768 ? 'fixed' : 'relative',
         height: '100%',
         zIndex: 100
       }}>
@@ -5091,6 +4800,11 @@ Do not use any tool to write the document, just output the block.`
                 }}>
                   <Layout size={18} /> Kanban Board
                 </li>
+                <li className={`menu-item ${activeView === 'visualizer' ? 'active' : ''}`} onClick={() => { 
+                  handleSidebarClick('visualizer'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
+                }}>
+                  <PieChartIcon size={18} /> Data Visualizer
+                </li>
                 <li className={`menu-item ${activeView === 'translate' ? 'active' : ''}`} onClick={() => { 
                   handleSidebarClick('translate'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
                 }}>
@@ -5099,11 +4813,7 @@ Do not use any tool to write the document, just output the block.`
               </div>
             </div>
           </div>
-          <li className={`menu-item ${activeView === 'visualizer' ? 'active' : ''}`} onClick={() => { 
-            handleSidebarClick('visualizer'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
-          }}>
-            <PieChartIcon size={18} /> Data Visualizer
-          </li>
+
           <li className={`menu-item ${activeView === 'library' ? 'active' : ''}`} onClick={() => { 
             handleSidebarClick('library'); if(window.innerWidth <= 768) setIsSidebarOpen(false); 
           }}>
@@ -5145,7 +4855,7 @@ Do not use any tool to write the document, just output the block.`
         {/* Unified Header */}
         <header className="main-header">
           <div style={{ display: 'flex', alignItems: 'center' }}>
-            {(!isSidebarOpen || window.innerWidth <= 768) && (
+            {(!isSidebarOpen || windowWidth <= 768) && (
               <button className="icon-btn" onClick={() => setIsSidebarOpen(true)} style={{ marginRight: '16px' }}>
                 <PanelLeft size={24} />
               </button>
@@ -5198,7 +4908,7 @@ Do not use any tool to write the document, just output the block.`
                       {isEditingDoc ? <><Eye size={14}/> <span className="hide-mobile">Preview</span></> : <><Edit2 size={14}/> <span className="hide-mobile">Edit</span></>}
                     </button>
                   )}
-                  {activeView !== 'calendar' && activeView !== 'kanban' && activeView !== 'translate' && activeView !== 'notes' && (
+                  {activeView !== 'calendar' && activeView !== 'kanban' && activeView !== 'translate' && activeView !== 'notes' && activeView !== 'visualizer' && (
                     isDocPaneOpen ? (
                       <button className="icon-btn" onClick={() => setIsDocPaneOpen(false)} title="Close Side Panel">
                         <PanelRightClose size={20} />
@@ -5220,7 +4930,13 @@ Do not use any tool to write the document, just output the block.`
         {activeView === 'history' ? (
           <HistoryView />
         ) : activeView === 'library' ? (
-          <LibraryWidget libraryFiles={libraryFiles} setLibraryFiles={setLibraryFiles} currentUser={currentUser} onPreviewImage={setFullscreenImage} />
+          <LibraryWidget 
+            libraryFiles={libraryFiles} 
+            setLibraryFiles={setLibraryFiles} 
+            currentUser={currentUser} 
+            setViewingFile={setViewingFile}
+            setIsPlayerMinimized={setIsPlayerMinimized}
+          />
         ) : activeView === 'notes' ? (
           <NotesWidget currentUser={currentUser} onGenerateAI={handleGenerateNoteContent} />
         ) : activeView === 'calendar' ? (
@@ -5250,7 +4966,9 @@ Do not use any tool to write the document, just output the block.`
             selectedDateStr={selectedDateStr} 
             setSelectedDateStr={setSelectedDateStr} 
           />
-        ) : activeView === 'translate' ? null : activeView === 'kanban' ? (
+        ) : activeView === 'translate' ? null : activeView === 'visualizer' ? (
+          <VisualizerWidget currentUser={currentUser} />
+        ) : activeView === 'kanban' ? (
           <KanbanWidget 
             boards={kanbanBoards} 
             setBoards={(newBoards) => {
@@ -5295,13 +5013,8 @@ Do not use any tool to write the document, just output the block.`
               className={`research-document ${(!isDocPaneOpen || activeView === 'chat') ? 'collapsed' : ''}`}
               style={(isDocPaneOpen && window.innerWidth > 1024 && activeView !== 'chat') ? { width: `${docPaneWidth}%`, transition: isDragging ? 'none' : 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)' } : {}}
             >
-                 <div className="doc-content" style={activeView === 'visualizer' ? { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } : {}}>
-                   {activeView === 'visualizer' ? (
-                      <ChartWidget charts={charts} setCharts={(newC) => { 
-                        ensureSessionExists();
-                        setCharts(newC); 
-                      }} />
-                    ) : isEditingDoc ? (
+                 <div className="doc-content">
+                   {isEditingDoc ? (
                      <textarea 
                        className="doc-textarea" 
                        value={documentContent}
@@ -5766,6 +5479,18 @@ Do not use any tool to write the document, just output the block.`
             sandbox="allow-scripts allow-popups"
           />
         </div>
+      )}
+
+      {/* Global File Viewer Modal */}
+      {viewingFile && (
+        <FileViewerModal 
+          file={viewingFile} 
+          onClose={() => setViewingFile(null)} 
+          isMinimized={isPlayerMinimized}
+          onToggleMinimize={() => setIsPlayerMinimized(!isPlayerMinimized)}
+          onNext={handleNextMedia}
+          onPrev={handlePrevMedia}
+        />
       )}
 
     </div>
