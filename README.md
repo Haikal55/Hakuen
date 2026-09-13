@@ -2,7 +2,7 @@
 
 Hakuen is a powerful, seamless AI assistant web application featuring unified chat history, intelligent routing, and an array of built-in tools. With Hakuen, you can conduct deep research, manage your kanban projects, schedule agendas, manage notes, visualize data, and parse PDF/Images all through natural conversation.
 
-## 🌟 Key Features
+## Key Features
 - **Seamless Unified Chat**: Experience fluid URL routing where all tools (Kanban, Calendar, Notes, etc.) share the same conversational context and memory.
 - **Dynamic Notes & Kanban Board**: Create notes in a grid or list view, manage to-do lists, and plan projects directly via AI generation. Notes open in a full-screen, responsive markdown-enabled viewer.
 - **Deep Research Agent**: Scrapes the web and generates comprehensive markdown documents dynamically.
@@ -13,11 +13,11 @@ Hakuen is a powerful, seamless AI assistant web application featuring unified ch
 
 
 
-## 🚀 Installation Guide
+## Installation Guide
 
 This application requires **Node.js** (v18.0.0 or higher recommended). Please follow the instructions for your specific Operating System below.
 
-### 🐧 Linux
+### Linux
 1. **Install Node.js & npm**:
    If you haven't installed Node.js, you can install it via your package manager. For Debian/Ubuntu:
    ```bash
@@ -34,7 +34,7 @@ This application requires **Node.js** (v18.0.0 or higher recommended). Please fo
    npm install
    ```
 
-### 🍎 macOS
+### macOS
 1. **Install Node.js & npm**:
    The easiest way to install Node.js on macOS is via [Homebrew](https://brew.sh/):
    ```bash
@@ -50,7 +50,7 @@ This application requires **Node.js** (v18.0.0 or higher recommended). Please fo
    npm install
    ```
 
-### 🪟 Windows
+### Windows
 1. **Install Node.js & npm**:
    Download the official Windows Installer (`.msi`) from [Node.js Official Website](https://nodejs.org/). Run the installer and follow the standard setup (make sure "npm" and "Add to PATH" are selected).
 2. **Clone the repository**:
@@ -66,7 +66,7 @@ This application requires **Node.js** (v18.0.0 or higher recommended). Please fo
 
 
 
-## 💻 Running the Application
+## Running the Application
 
 This app uses an Express + SQLite backend to save your chat sessions and a Vite + React frontend for the UI. You will need to run both servers.
 
