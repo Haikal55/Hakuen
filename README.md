@@ -89,7 +89,7 @@ This app uses an Express + SQLite backend to save your chat sessions and a Vite 
 
 
 
-## 🛠️ Tech Stack
+## Tech Stack
 - **Frontend**: React 19, Vite, React Router DOM, Recharts, React Markdown
 - **Backend**: Node.js, Express
 - **Database**: SQLite (`better-sqlite3`)
